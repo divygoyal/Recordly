@@ -52,7 +52,7 @@ const FRAGMENT = /* glsl */ `
   uniform float uRotateZ;       // roll (radians): subtle card tilt
   uniform float uFov;           // field of view (radians): controls perspective strength
   uniform float uCornerRadius;
-  uniform float uContentInset;  // 0.0–0.15: shrinks content to create floating card padding
+  uniform float uContentInset;  // 0.0–0.20: total inset (static base + dynamic zoom padding)
 
   float roundedRectSDF(vec2 p, vec2 halfSize, float radius) {
     vec2 d = abs(p) - halfSize + radius;

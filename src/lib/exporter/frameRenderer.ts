@@ -125,11 +125,11 @@ function createAnimationState(): AnimationState {
 
 /** Spring config for 3D perspective — must match VideoPlayback.tsx */
 const PERSP_SPRING_CONFIG: SpringConfig = {
-  stiffness: 200,
-  damping: 22,
+  stiffness: 170,
+  damping: 26,
   mass: 1.0,
-  restDelta: 0.0001,
-  restSpeed: 0.005,
+  restDelta: 0.001,
+  restSpeed: 0.01,
 };
 
 // Renders video frames with all effects (background, zoom, crop, blur, shadow) to an offscreen canvas for export.
@@ -834,7 +834,8 @@ export class FrameRenderer {
         }
       }
 
-      // 3D perspective with spring animation (matching preview)
+      // 3D perspective with spring animation — always active for static
+      // background padding + rounded corners (matching FocuSee).
       if (this.perspectiveFilter) {
         const zoom3d = activeRegion?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
         const deltaMs = Math.max(1, timeMs - this.lastFrameTimeMs);
@@ -858,30 +859,22 @@ export class FrameRenderer {
         this.lastSpringRotX = springRotX;
         this.lastSpringRotY = springRotY;
 
-        const hasRotation = Math.abs(springRotX) > 0.0001 || Math.abs(springRotY) > 0.0001 || Math.abs(springRotZ) > 0.0001;
-        const isZoomActive = activeProgress > 0.01;
-        if (isZoomActive || hasRotation) {
-          this.perspectiveFilter.rotateX = springRotX;
-          this.perspectiveFilter.rotateY = springRotY;
-          this.perspectiveFilter.rotateZ = springRotZ;
-          this.perspectiveFilter.fov = fov;
-          this.perspectiveFilter.contentInset = activeProgress * 0.05;
-          filters.push(this.perspectiveFilter);
-        }
+        this.perspectiveFilter.rotateX = springRotX;
+        this.perspectiveFilter.rotateY = springRotY;
+        this.perspectiveFilter.rotateZ = springRotZ;
+        this.perspectiveFilter.fov = fov;
+        // Static 5% base padding (FocuSee backgroundPadding) + dynamic 12% during zoom
+        this.perspectiveFilter.contentInset = 0.05 + activeProgress * 0.12;
+        filters.push(this.perspectiveFilter);
       }
       this.lastFrameTimeMs = timeMs;
 
       this.videoContainer.filters = filters.length > 0 ? filters : null;
 
-      // Toggle mask off during perspective so the shader's SDF handles
-      // corner rounding and the cursor isn't clipped by the hard mask.
-      const hasPerspective = filters.includes(this.perspectiveFilter!);
-      if (hasPerspective && this.videoContainer.mask === this.maskGraphics) {
+      // Perspective filter always active → squircle mask not needed
+      if (this.videoContainer.mask === this.maskGraphics && this.maskGraphics) {
         this.videoContainer.mask = null;
-        if (this.maskGraphics) this.maskGraphics.visible = false;
-      } else if (!hasPerspective && this.videoContainer.mask === null && this.maskGraphics) {
-        this.maskGraphics.visible = true;
-        this.videoContainer.mask = this.maskGraphics;
+        this.maskGraphics.visible = false;
       }
     }
 
@@ -1161,7 +1154,7 @@ export class FrameRenderer {
     }
 
     // Step 1.5: Spotlight overlay (FocuSee SpotLightCommand — dims background during zoom)
-    const spotlightOpacity = this.animationState.progress * 0.18;
+    const spotlightOpacity = this.animationState.progress * 0.30;
     if (spotlightOpacity > 0.001) {
       ctx.save();
       ctx.globalAlpha = spotlightOpacity;
@@ -1181,18 +1174,18 @@ export class FrameRenderer {
       shadowCtx.clearRect(0, 0, w, h);
       shadowCtx.save();
 
-      // Tilt-responsive shadow (matches preview)
+      // Tilt-responsive shadow (matches preview — enhanced for floating card effect)
       const intensity = this.config.shadowIntensity;
-      const zoomBoost = 1 + this.animationState.progress * 0.35;
+      const zoomBoost = 1 + this.animationState.progress * 0.5;
       const shadowX = Math.round(this.lastSpringRotY * 200);
       const shadowBaseY = 12 * intensity;
       const shadowY = Math.round(shadowBaseY - this.lastSpringRotX * 150);
-      const baseBlur1 = Math.round(48 * intensity * zoomBoost);
-      const baseBlur2 = Math.round(16 * intensity);
-      const baseBlur3 = Math.round(8 * intensity);
-      const baseAlpha1 = (0.7 * intensity * zoomBoost).toFixed(2);
-      const baseAlpha2 = (0.5 * intensity).toFixed(2);
-      const baseAlpha3 = (0.3 * intensity).toFixed(2);
+      const baseBlur1 = Math.round(60 * intensity * zoomBoost);
+      const baseBlur2 = Math.round(24 * intensity);
+      const baseBlur3 = Math.round(12 * intensity);
+      const baseAlpha1 = (0.8 * intensity * zoomBoost).toFixed(2);
+      const baseAlpha2 = (0.6 * intensity).toFixed(2);
+      const baseAlpha3 = (0.4 * intensity).toFixed(2);
 
       shadowCtx.filter =
         `drop-shadow(${shadowX}px ${shadowY}px ${baseBlur1}px rgba(0,0,0,${baseAlpha1})) ` +

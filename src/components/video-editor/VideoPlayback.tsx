@@ -85,7 +85,6 @@ import {
 import {
   createSpringState,
   stepSpringValue,
-  resetSpringState,
   type SpringConfig,
 } from "./videoPlayback/motionSmoothing";
 import { createVideoEventHandlers } from "./videoPlayback/videoEventHandlers";
@@ -141,11 +140,11 @@ function createPlaybackAnimationState(): PlaybackAnimationState {
 }
 
 /** Spring config for 3D perspective rotation — FocuSee-style camera swing.
- *  Critically damped (ratio ≈ 1.06) to avoid oscillation that would cause
- *  filter flicker at zoom boundaries. */
+ *  Slightly underdamped (ratio ≈ 0.99) for subtle organic overshoot that
+ *  makes the camera feel alive, like FocuSee's SpringTransform. */
 const PERSP_SPRING_CONFIG: SpringConfig = {
-  stiffness: 200,
-  damping: 30,
+  stiffness: 170,
+  damping: 26,
   mass: 1.0,
   restDelta: 0.001,
   restSpeed: 0.01,
@@ -1352,6 +1351,9 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
           }
 
           // 3D perspective with spring animation (FocuSee-style camera swing)
+          // Filter is ALWAYS active to provide static background padding +
+          // rounded corners (matching FocuSee's backgroundPadding: 0.05).
+          // During zoom, dynamic inset is added on top.
           const perspFilter = perspectiveFilterRef.current;
           if (perspFilter) {
             const zoom3d = activeRegion?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
@@ -1395,35 +1397,25 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
               PERSP_SPRING_CONFIG,
             );
 
-            const hasRotation =
-              Math.abs(springRotX) > 0.001 ||
-              Math.abs(springRotY) > 0.001 ||
-              Math.abs(springRotZ) > 0.001;
-
-            // Hysteresis: once activated, keep filter on until zoom fully exits
-            // and spring has settled. Prevents rapid on/off toggling that causes
-            // PixiJS render target rebuilds (visual glitches).
-            const wasActive = perspFilterActiveRef.current;
-            const shouldActivate = zoomProgress > 0.05 || hasRotation;
-            const shouldDeactivate = zoomProgress < 0.001 && !hasRotation;
-            const isActive = wasActive ? !shouldDeactivate : shouldActivate;
-            perspFilterActiveRef.current = isActive;
-
-            if (isActive) {
-              perspFilter.rotateX = springRotX;
-              perspFilter.rotateY = springRotY;
-              perspFilter.rotateZ = springRotZ;
-              perspFilter.fov = fov;
-              // Content inset creates the "floating card" look (FocuSee uses 0.05)
-              perspFilter.contentInset = zoomProgress * 0.05;
-              videoFilters.push(perspFilter);
-            }
+            perspFilter.rotateX = springRotX;
+            perspFilter.rotateY = springRotY;
+            perspFilter.rotateZ = springRotZ;
+            perspFilter.fov = fov;
+            // Static 5% base padding (FocuSee backgroundPadding) + dynamic 12% during zoom
+            perspFilter.contentInset = 0.05 + zoomProgress * 0.12;
+            videoFilters.push(perspFilter);
+            perspFilterActiveRef.current = true;
 
             // Spotlight background dimming
             const spotlightEl = spotlightRef.current;
             if (spotlightEl) {
-              spotlightEl.style.opacity = `${zoomProgress * 0.18}`;
+              spotlightEl.style.opacity = `${zoomProgress * 0.30}`;
             }
+
+            const hasRotation =
+              Math.abs(springRotX) > 0.001 ||
+              Math.abs(springRotY) > 0.001 ||
+              Math.abs(springRotZ) > 0.001;
 
             // Tilt-responsive shadow (shifts with rotation, intensifies during zoom)
             if (hasRotation) {
@@ -1435,14 +1427,14 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
                 const shadowY = Math.round(
                   shadowBaseY - springRotX * 150,
                 );
-                const zoomBoost = 1 + zoomProgress * 0.35;
-                const blur1 = Math.round(si * 48 * zoomBoost);
-                const blur2 = Math.round(si * 16);
-                const blur3 = Math.round(si * 8);
+                const zoomBoost = 1 + zoomProgress * 0.5;
+                const blur1 = Math.round(si * 60 * zoomBoost);
+                const blur2 = Math.round(si * 24);
+                const blur3 = Math.round(si * 12);
                 containerEl.style.filter =
-                  `drop-shadow(${shadowX}px ${shadowY}px ${blur1}px rgba(0,0,0,${(si * 0.7 * zoomBoost).toFixed(2)})) ` +
-                  `drop-shadow(${Math.round(shadowX * 0.4)}px ${Math.round(si * 4 - springRotX * 50)}px ${blur2}px rgba(0,0,0,${(si * 0.5).toFixed(2)})) ` +
-                  `drop-shadow(0px ${Math.round(si * 2)}px ${blur3}px rgba(0,0,0,${(si * 0.3).toFixed(2)}))`;
+                  `drop-shadow(${shadowX}px ${shadowY}px ${blur1}px rgba(0,0,0,${(si * 0.8 * zoomBoost).toFixed(2)})) ` +
+                  `drop-shadow(${Math.round(shadowX * 0.4)}px ${Math.round(si * 4 - springRotX * 50)}px ${blur2}px rgba(0,0,0,${(si * 0.6).toFixed(2)})) ` +
+                  `drop-shadow(0px ${Math.round(si * 2)}px ${blur3}px rgba(0,0,0,${(si * 0.4).toFixed(2)}))`;
               }
             }
           }
@@ -1455,21 +1447,12 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             vc.filters = newCount > 0 ? videoFilters : null;
           }
 
-          // When perspective filter is active, disable the squircle mask so the
-          // shader's SDF handles all corner rounding (the hard mask clips edges
-          // before the shader runs, overriding its soft rounded corners).
-          // Also hide the Graphics child so it doesn't render as a visible
-          // white rectangle when no longer used as a mask.
+          // Perspective filter always active → squircle mask not needed
+          // (shader SDF handles all corner rounding)
           const mg = maskGraphicsRef.current;
-          if (mg) {
-            const perspActive = perspFilterActiveRef.current;
-            if (perspActive && vc.mask === mg) {
-              vc.mask = null;
-              mg.visible = false;
-            } else if (!perspActive && vc.mask === null) {
-              mg.visible = true;
-              vc.mask = mg;
-            }
+          if (mg && vc.mask === mg) {
+            vc.mask = null;
+            mg.visible = false;
           }
         }
       };

@@ -315,11 +315,11 @@ export const SPEED_OPTIONS: Array<{ speed: PlaybackSpeed; label: string }> = [
 export const DEFAULT_PLAYBACK_SPEED: PlaybackSpeed = 1.5;
 
 export const ZOOM_DEPTH_SCALES: Record<ZoomDepth, number> = {
-  1: 1.25,
-  2: 1.5,
-  3: 1.8,
-  4: 2.2,
-  5: 3.5,
+  1: 1.5,
+  2: 2.0,
+  3: 2.5,
+  4: 3.0,
+  5: 4.0,
   6: 5.0,
 };
 
