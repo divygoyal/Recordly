@@ -27,28 +27,28 @@ describe("compute3DTransform", () => {
     expect(rotateZ).toBeCloseTo(0, 3);
   });
 
-  it("yaws when focus is on the left edge (left tilts away)", () => {
+  it("yaws when focus is on the left edge (left side toward camera)", () => {
     const { rotateY } = compute3DTransform(
       makeConfig(1),
       { cx: 0.1, cy: 0.5 },
       1,
     );
-    // Focus left → positive rotateY
-    // RotateY = 20 + 0.1*(-40) = 16°
-    expect(rotateY).toBeGreaterThan(0);
-    expect(rotateY).toBeCloseTo(16 * DEG2RAD, 2);
+    // Focus left → negative rotateY (left side closer in our shader convention)
+    // FocuSee RotateY = 20 + 0.1*(-40) = 16°, negated for shader = -16°
+    expect(rotateY).toBeLessThan(0);
+    expect(rotateY).toBeCloseTo(-16 * DEG2RAD, 2);
   });
 
-  it("yaws when focus is on the right edge (right tilts away)", () => {
+  it("yaws when focus is on the right edge (right side toward camera)", () => {
     const { rotateY } = compute3DTransform(
       makeConfig(1),
       { cx: 0.9, cy: 0.5 },
       1,
     );
-    // Focus right → negative rotateY
-    // RotateY = 20 + 0.9*(-40) = -16°
-    expect(rotateY).toBeLessThan(0);
-    expect(rotateY).toBeCloseTo(-16 * DEG2RAD, 2);
+    // Focus right → positive rotateY (right side closer in our shader convention)
+    // FocuSee RotateY = 20 + 0.9*(-40) = -16°, negated for shader = +16°
+    expect(rotateY).toBeGreaterThan(0);
+    expect(rotateY).toBeCloseTo(16 * DEG2RAD, 2);
   });
 
   it("pitches more backward when focus is near top", () => {
@@ -77,9 +77,9 @@ describe("compute3DTransform", () => {
       { cx: 0.75, cy: 0.25 },
       1,
     );
-    // FocuSee normal: RX=-28.75°, RY=-10°, RZ=(0.25)*2*0.25*(-4)=-0.5°
+    // FocuSee normal: RX=-28.75°, RY=-10° (negated for shader = +10°), RZ=-0.5°
     expect(rotateX).toBeCloseTo(-28.75 * DEG2RAD, 2);
-    expect(rotateY).toBeCloseTo(-10 * DEG2RAD, 2);
+    expect(rotateY).toBeCloseTo(10 * DEG2RAD, 2);
     expect(rotateZ).toBeCloseTo(-0.5 * DEG2RAD, 2);
   });
 

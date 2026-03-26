@@ -14,6 +14,12 @@
  *   RotateY = 20 + cx * (-40)         degrees (proportional to horizontal position)
  *   RotateZ = (cx - 0.5) * 2 * cy * (-4)  degrees (subtle roll)
  *   FOV     = 30°
+ *
+ * COORDINATE SYSTEM NOTE:
+ * FocuSee uses WPF Viewport3D where +RotateY = counter-clockwise from above
+ * (left side toward camera). Our GLSL ray-plane shader uses standard math
+ * convention where +RotateY = clockwise from above (right side toward camera).
+ * We negate RotateY after computing from FocuSee's formulas to compensate.
  */
 
 import type { Zoom3DConfig, ZoomFocus } from "../types";
@@ -85,9 +91,11 @@ export function compute3DTransform(
   const rotateXDeg =
     MIN_PITCH_DEG + focus.cy * (MAX_PITCH_DEG - MIN_PITCH_DEG);
 
-  // RotateY = maxYaw + cx * (minYaw - maxYaw)
+  // RotateY = maxYaw + cx * (minYaw - maxYaw) — FocuSee formula
+  // NEGATED to map from WPF convention (+Y = left toward camera) to our
+  // GLSL shader convention (+Y = right toward camera)
   const rotateYDeg =
-    MAX_YAW_DEG + focus.cx * (MIN_YAW_DEG - MAX_YAW_DEG);
+    -(MAX_YAW_DEG + focus.cx * (MIN_YAW_DEG - MAX_YAW_DEG));
 
   // RotateZ = (cx - 0.5) * 2 * cy * rollFactor
   const rotateZDeg =
