@@ -862,9 +862,10 @@ export class FrameRenderer {
         this.lastSpringRotX = springRotX;
         this.lastSpringRotY = springRotY;
 
-        this.perspectiveFilter.rotateX = springRotX;
-        this.perspectiveFilter.rotateY = springRotY;
-        this.perspectiveFilter.rotateZ = springRotZ;
+        // Gate rotation by activeProgress (matches FocuSee's Animation.Info.Alpha gating)
+        this.perspectiveFilter.rotateX = springRotX * activeProgress;
+        this.perspectiveFilter.rotateY = springRotY * activeProgress;
+        this.perspectiveFilter.rotateZ = springRotZ * activeProgress;
         this.perspectiveFilter.fov = fov;
         // Static 5% padding (FocuSee backgroundPadding=0.05), no dynamic increase
         this.perspectiveFilter.contentInset = 0.05;

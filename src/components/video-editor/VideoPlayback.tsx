@@ -1401,9 +1401,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
               PERSP_SPRING_CONFIG,
             );
 
-            perspFilter.rotateX = springRotX;
-            perspFilter.rotateY = springRotY;
-            perspFilter.rotateZ = springRotZ;
+            // Gate rotation by zoomProgress (matches FocuSee's Animation.Info.Alpha gating)
+            perspFilter.rotateX = springRotX * zoomProgress;
+            perspFilter.rotateY = springRotY * zoomProgress;
+            perspFilter.rotateZ = springRotZ * zoomProgress;
             perspFilter.fov = fov;
             // Static 5% padding (FocuSee backgroundPadding=0.05), no dynamic increase
             perspFilter.contentInset = 0.05;
