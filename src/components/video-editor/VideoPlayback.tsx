@@ -1319,23 +1319,27 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
         state.appliedScale = appliedTransform.scale;
 
         // ── Unified filter management ─────────────────────────
-        // Build the complete filter array ONCE per frame to avoid
-        // the churn that causes quality fluctuation.
+        // Build filter arrays for video and camera containers.
+        // Motion blur applies to video only; perspective applies to
+        // cameraContainer so both video AND cursor get the same 3D warp.
         const vc = videoContainerRef.current;
-        if (vc) {
-          const filters: import("pixi.js").Filter[] = [];
+        const cc = cameraContainerRef.current;
+        if (vc && cc) {
+          const videoFilters: import("pixi.js").Filter[] = [];
 
           // Motion blur: check if the filter has active velocity
           const mbf = motionBlurFilterRef.current;
           if (mbf && hasActiveMotionBlur(zoomMotionBlurRef.current)) {
             const vel = mbf.velocity as { x: number; y: number };
             if (vel.x !== 0 || vel.y !== 0) {
-              filters.push(mbf);
+              videoFilters.push(mbf);
             }
           }
 
           // 3D perspective with spring animation (FocuSee-style camera swing)
+          // Applied to cameraContainer so cursor is warped along with video.
           const perspFilter = perspectiveFilterRef.current;
+          let cameraFilters: import("pixi.js").Filter[] | null = null;
           if (perspFilter) {
             const zoom3d = activeRegion?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
             const deltaMs = appRef.current?.ticker.deltaMS ?? 16;
@@ -1383,7 +1387,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
               perspFilter.fov = fov;
               // Content inset creates the "floating card" look with dark background padding
               perspFilter.contentInset = zoomProgress * 0.10;
-              filters.push(perspFilter);
+              cameraFilters = [perspFilter];
             }
 
             // Spotlight background dimming
@@ -1414,8 +1418,9 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             }
           }
 
-          // Set filters once (null when empty for maximum sharpness)
-          vc.filters = filters.length > 0 ? filters : null;
+          // Motion blur on video only; perspective on camera (warps video + cursor together)
+          vc.filters = videoFilters.length > 0 ? videoFilters : null;
+          cc.filters = cameraFilters;
         }
       };
 

@@ -129,7 +129,7 @@ const FRAGMENT = /* glsl */ `
 `;
 
 /** Corner radius matching FocuSee's backgroundRound (~0.04) */
-const DEFAULT_CORNER_RADIUS = 0.038;
+const DEFAULT_CORNER_RADIUS = 0.045;
 
 /** Default FOV in radians (30° — matching FocuSee's CreateAtPoint) */
 const DEFAULT_FOV = 0.5236; // 30° in radians
