@@ -47,39 +47,40 @@ const FRAGMENT = /* glsl */ `
   out vec4 finalColor;
 
   uniform sampler2D uTexture;
-  uniform float uRotateX;       // pitch (radians): negative = top tilts away (FocuSee convention)
-  uniform float uRotateY;       // yaw (radians): negative = right side tilts away (FocuSee convention)
+  uniform float uRotateX;       // pitch (radians): negative = top tilts away
+  uniform float uRotateY;       // yaw (radians): negative = right side tilts away
   uniform float uRotateZ;       // roll (radians): subtle card tilt
-  uniform float uFov;           // field of view (radians): controls perspective strength
-  uniform float uCornerRadius;  // kept for uniform compat (corners handled by PixiJS mask)
-  uniform float uContentInset;  // kept for uniform compat (padding handled by layout system)
+  uniform float uFov;           // field of view (radians)
+  uniform float uCornerRadius;  // viewport boundary corner radius (FocuSee backgroundRound)
+  uniform float uContentInset;  // viewport inset 0–0.15 (FocuSee backgroundPadding, ramped by zoom)
+  uniform vec2  uVideoExtent;   // fraction of filter texture occupied by video (0–1 each axis)
+
+  // Signed distance to a rounded rectangle centered at origin
+  float roundedBoxSDF(vec2 p, vec2 halfSize, float radius) {
+    vec2 d = abs(p) - halfSize + radius;
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
+  }
 
   void main(void) {
-    // Map output pixel to centered coords [-1, 1]
     vec2 screen = (vTextureCoord - 0.5) * 2.0;
-
-    // Perspective strength from FOV
     float ps = tan(uFov * 0.5);
 
     // Ray from camera through this pixel
     vec3 rayDir = vec3(screen.x * ps, screen.y * ps, 1.0);
 
-    // Rotation matrix R = Rz * Ry * Rx (roll * yaw * pitch)
+    // Rotation matrix R = Rz * Ry * Rx
     float cX = cos(uRotateX), sX = sin(uRotateX);
     float cY = cos(uRotateY), sY = sin(uRotateY);
     float cZ = cos(uRotateZ), sZ = sin(uRotateZ);
 
-    // Surface normal after rotation: third column of R = Rz * Ry * Rx
     vec3 normal = vec3(
       sY * cX * cZ + sX * sZ,
       sY * cX * sZ - sX * cZ,
       cY * cX
     );
 
-    // Surface center at z=1
     vec3 center = vec3(0.0, 0.0, 1.0);
 
-    // Ray-plane intersection
     float denom = dot(normal, rayDir);
     if (abs(denom) < 0.0001) {
       finalColor = vec4(0.0);
@@ -95,23 +96,33 @@ const FRAGMENT = /* glsl */ `
     vec3 hit = rayDir * t;
     vec3 offset = hit - center;
 
-    // Transform back to surface-local coords via R^T (transpose of R = Rz*Ry*Rx)
     float localX = cY * cZ * offset.x + cY * sZ * offset.y + (-sY) * offset.z;
     float localY = (sY * sX * cZ - cX * sZ) * offset.x
                  + (sY * sX * sZ + cX * cZ) * offset.y
                  + cY * sX * offset.z;
 
-    // Map to UV [0, 1] — divide by 2*ps to normalize (identity when rotation=0)
     vec2 texUV = vec2(localX, localY) / (2.0 * ps) + 0.5;
 
-    // Out-of-range → transparent
+    // Out-of-range → transparent (quick reject)
     if (texUV.x < -0.05 || texUV.x > 1.05 || texUV.y < -0.05 || texUV.y > 1.05) {
       finalColor = vec4(0.0);
       return;
     }
 
     vec2 sampleUV = clamp(texUV, 0.0, 1.0);
-    finalColor = texture(uTexture, sampleUV);
+    vec4 color = texture(uTexture, sampleUV);
+
+    // Post-projection viewport boundary (FocuSee backgroundPadding + backgroundRound)
+    // Creates the "floating card" effect — transparent outside boundary → dark bg shows through
+    if (uContentInset > 0.0001 && uVideoExtent.x > 0.0 && uVideoExtent.y > 0.0) {
+      vec2 vpHalf = uVideoExtent * (1.0 - uContentInset);
+      float cornerSize = uCornerRadius * min(vpHalf.x, vpHalf.y);
+      float d = roundedBoxSDF(screen, vpHalf, cornerSize);
+      float vpAlpha = 1.0 - smoothstep(-0.005, 0.005, d);
+      color *= vpAlpha;
+    }
+
+    finalColor = color;
   }
 `;
 
@@ -122,7 +133,7 @@ const DEFAULT_CORNER_RADIUS = 0.04;
 const DEFAULT_FOV = 0.5236; // 30° in radians
 
 /** Extra padding so warped pixels aren't clipped at edges */
-const FILTER_PADDING = 300;
+export const FILTER_PADDING = 300;
 
 export class PerspectiveWarpFilter extends Filter {
   constructor(rendererResolution?: number) {
@@ -142,6 +153,7 @@ export class PerspectiveWarpFilter extends Filter {
           uFov: { value: DEFAULT_FOV, type: "f32" },
           uCornerRadius: { value: DEFAULT_CORNER_RADIUS, type: "f32" },
           uContentInset: { value: 0, type: "f32" },
+          uVideoExtent: { value: new Float32Array([0, 0]), type: "vec2<f32>" },
         },
       },
       padding: FILTER_PADDING,
@@ -190,11 +202,27 @@ export class PerspectiveWarpFilter extends Filter {
     return this.resources.perspectiveUniforms.uniforms.uCornerRadius as number;
   }
 
-  /** Content inset (0–0.15): shrinks content to create floating card padding. */
+  /** Content inset (0–0.15): shrinks viewport boundary for floating card padding. */
   set contentInset(v: number) {
     this.resources.perspectiveUniforms.uniforms.uContentInset = v;
   }
   get contentInset(): number {
     return this.resources.perspectiveUniforms.uniforms.uContentInset as number;
+  }
+
+  /** Fraction of filter texture width occupied by video content (0–1). */
+  set videoExtentX(v: number) {
+    (this.resources.perspectiveUniforms.uniforms.uVideoExtent as Float32Array)[0] = v;
+  }
+  get videoExtentX(): number {
+    return (this.resources.perspectiveUniforms.uniforms.uVideoExtent as Float32Array)[0];
+  }
+
+  /** Fraction of filter texture height occupied by video content (0–1). */
+  set videoExtentY(v: number) {
+    (this.resources.perspectiveUniforms.uniforms.uVideoExtent as Float32Array)[1] = v;
+  }
+  get videoExtentY(): number {
+    return (this.resources.perspectiveUniforms.uniforms.uVideoExtent as Float32Array)[1];
   }
 }

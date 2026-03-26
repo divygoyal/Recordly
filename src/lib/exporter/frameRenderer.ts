@@ -29,7 +29,7 @@ import {
   createMotionBlurState,
   type MotionBlurState,
 } from "@/components/video-editor/videoPlayback/zoomTransform";
-import { PerspectiveWarpFilter } from "@/components/video-editor/videoPlayback/perspectiveWarpFilter";
+import { PerspectiveWarpFilter, FILTER_PADDING } from "@/components/video-editor/videoPlayback/perspectiveWarpFilter";
 import {
   compute3DTransform,
   is3DZoomActive,
@@ -867,8 +867,14 @@ export class FrameRenderer {
         this.perspectiveFilter.rotateY = springRotY * activeProgress;
         this.perspectiveFilter.rotateZ = springRotZ * activeProgress;
         this.perspectiveFilter.fov = fov;
-        // Padding handled by layout system (paddingScale), not shader
-        this.perspectiveFilter.contentInset = 0;
+        // Viewport boundary: ramp contentInset by activeProgress (FocuSee backgroundPadding=0.05)
+        this.perspectiveFilter.contentInset = 0.05 * activeProgress;
+        // Tell shader where video is within filter texture
+        const bm = this.layoutCache.maskRect;
+        if (bm && bm.width > 0 && bm.height > 0) {
+          this.perspectiveFilter.videoExtentX = bm.width / (bm.width + 2 * FILTER_PADDING);
+          this.perspectiveFilter.videoExtentY = bm.height / (bm.height + 2 * FILTER_PADDING);
+        }
         filters.push(this.perspectiveFilter);
       }
       this.lastFrameTimeMs = timeMs;
