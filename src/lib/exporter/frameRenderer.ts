@@ -867,18 +867,19 @@ export class FrameRenderer {
         this.perspectiveFilter.rotateY = springRotY * activeProgress;
         this.perspectiveFilter.rotateZ = springRotZ * activeProgress;
         this.perspectiveFilter.fov = fov;
-        // Static 5% padding (FocuSee backgroundPadding=0.05), no dynamic increase
-        this.perspectiveFilter.contentInset = 0.05;
+        // Padding handled by layout system (paddingScale), not shader
+        this.perspectiveFilter.contentInset = 0;
         filters.push(this.perspectiveFilter);
       }
       this.lastFrameTimeMs = timeMs;
 
       this.videoContainer.filters = filters.length > 0 ? filters : null;
 
-      // Perspective filter always active → squircle mask not needed
-      if (this.videoContainer.mask === this.maskGraphics && this.maskGraphics) {
-        this.videoContainer.mask = null;
-        this.maskGraphics.visible = false;
+      // Re-enable squircle mask if it was disabled — mask provides
+      // rounded corners on the video card (applied BEFORE the 3D filter).
+      if (this.maskGraphics && this.videoContainer.mask !== this.maskGraphics) {
+        this.maskGraphics.visible = true;
+        this.videoContainer.mask = this.maskGraphics;
       }
     }
 

@@ -1406,8 +1406,8 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             perspFilter.rotateY = springRotY * zoomProgress;
             perspFilter.rotateZ = springRotZ * zoomProgress;
             perspFilter.fov = fov;
-            // Static 5% padding (FocuSee backgroundPadding=0.05), no dynamic increase
-            perspFilter.contentInset = 0.05;
+            // Padding handled by layout system (paddingScale), not shader
+            perspFilter.contentInset = 0;
             videoFilters.push(perspFilter);
             perspFilterActiveRef.current = true;
 
@@ -1452,12 +1452,12 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             vc.filters = newCount > 0 ? videoFilters : null;
           }
 
-          // Perspective filter always active → squircle mask not needed
-          // (shader SDF handles all corner rounding)
+          // Re-enable squircle mask if it was disabled — mask provides
+          // rounded corners on the video card (applied BEFORE the 3D filter).
           const mg = maskGraphicsRef.current;
-          if (mg && vc.mask === mg) {
-            vc.mask = null;
-            mg.visible = false;
+          if (mg && vc.mask !== mg) {
+            mg.visible = true;
+            vc.mask = mg;
           }
         }
       };
