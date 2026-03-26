@@ -60,16 +60,34 @@ const FRAGMENT = /* glsl */ `
   }
 
   void main(void) {
-    // Map output pixel to centered coords [-1, 1]
-    // Scale by content inset to create "floating card" padding
-    float contentScale = 1.0 / max(1.0 - uContentInset, 0.01);
-    vec2 screen = (vTextureCoord - 0.5) * 2.0 * contentScale;
+    // Map output pixel to centered coords [-1, 1] (full scale, NO pre-projection inset)
+    vec2 screen = (vTextureCoord - 0.5) * 2.0;
+
+    // Post-projection viewport boundary (FocuSee applies backgroundPadding
+    // as a WPF container Margin AFTER 3D rendering — uniform in screen space).
+    // vpScale defines the fraction of screen the viewport occupies.
+    float vpScale = max(1.0 - uContentInset, 0.01);
+
+    // Screen-space rounded rect SDF for viewport boundary (uniform padding)
+    vec2 vpPos = screen * 0.5; // map to [-0.5, 0.5] for SDF
+    float vpHalf = vpScale * 0.5;
+    float vpDist = roundedRectSDF(vpPos, vec2(vpHalf), uCornerRadius);
+    float vpAA = 1.0 - smoothstep(-0.004, 0.004, vpDist);
+
+    if (vpAA < 0.001) {
+      finalColor = vec4(0.0);
+      return;
+    }
+
+    // Remap screen coords to viewport space for ray casting.
+    // The card fills the viewport; changing padding doesn't affect 3D projection.
+    vec2 vpCoord = screen / vpScale;
 
     // Perspective strength from FOV (wider = stronger perspective)
     float ps = tan(uFov * 0.5);
 
-    // Ray from camera through this pixel
-    vec3 rayDir = vec3(screen.x * ps, screen.y * ps, 1.0);
+    // Ray from camera through this viewport pixel
+    vec3 rayDir = vec3(vpCoord.x * ps, vpCoord.y * ps, 1.0);
 
     // Rotation matrix R = Rz * Ry * Rx (roll * yaw * pitch)
     float cX = cos(uRotateX), sX = sin(uRotateX);
@@ -89,13 +107,13 @@ const FRAGMENT = /* glsl */ `
     // Ray-plane intersection
     float denom = dot(normal, rayDir);
     if (abs(denom) < 0.0001) {
-      finalColor = vec4(0.0);
+      finalColor = vec4(0.0, 0.0, 0.0, 0.0) * vpAA;
       return;
     }
 
     float t = dot(normal, center) / denom;
     if (t <= 0.0) {
-      finalColor = vec4(0.0);
+      finalColor = vec4(0.0, 0.0, 0.0, 0.0) * vpAA;
       return;
     }
 
@@ -111,27 +129,22 @@ const FRAGMENT = /* glsl */ `
     // Map to UV [0, 1] — divide by 2*ps to normalize (identity when rotation=0)
     vec2 texUV = vec2(localX, localY) / (2.0 * ps) + 0.5;
 
-    // Out-of-range → transparent (generous tolerance for padding + perspective)
-    if (texUV.x < -0.15 || texUV.x > 1.15 || texUV.y < -0.15 || texUV.y > 1.15) {
-      finalColor = vec4(0.0);
-      return;
-    }
-
-    // Rounded corners via SDF
-    vec2 cornerPos = texUV - 0.5;
-    float dist = roundedRectSDF(cornerPos, vec2(0.5), uCornerRadius);
-
-    // Feathered edge — wider than basic AA for "floating screen" look
-    float edgeAA = 1.0 - smoothstep(-0.004, 0.004, dist);
-
-    if (edgeAA < 0.001) {
+    // Out-of-range → transparent (card edge visible through viewport)
+    if (texUV.x < -0.05 || texUV.x > 1.05 || texUV.y < -0.05 || texUV.y > 1.05) {
       finalColor = vec4(0.0);
       return;
     }
 
     vec2 sampleUV = clamp(texUV, 0.0, 1.0);
     vec4 color = texture(uTexture, sampleUV);
-    finalColor = color * edgeAA;
+
+    // Card edge SDF (texture space) — feathered edge where 3D card ends
+    vec2 cardPos = texUV - 0.5;
+    float cardDist = roundedRectSDF(cardPos, vec2(0.5), uCornerRadius * 0.5);
+    float cardAA = 1.0 - smoothstep(-0.003, 0.003, cardDist);
+
+    // Combine: viewport boundary (uniform screen-space) × card edge (3D surface)
+    finalColor = color * cardAA * vpAA;
   }
 `;
 

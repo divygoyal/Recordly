@@ -4,7 +4,7 @@ import {
 } from "../types";
 import { TRANSITION_WINDOW_MS, ZOOM_IN_TRANSITION_WINDOW_MS } from "./constants";
 import { clampFocusToScale } from "./focusUtils";
-import { clamp01, cubicBezier, easeOutCubic } from "./mathUtils";
+import { clamp01, cubicBezier, easeOutCubic, easeInOutCubic } from "./mathUtils";
 
 const CHAINED_ZOOM_PAN_GAP_MS = 1500;
 const CONNECTED_ZOOM_PAN_DURATION_MS = 1000;
@@ -58,8 +58,10 @@ export function computeRegionStrength(
     return 1;
   }
 
+  // Zoom-out: easeInOutCubic for smooth departure (lingers → drops → settles)
+  // Approximates FocuSee's spring-based camera return (overdamped ζ=1.107)
   const progress = clamp01((timeMs - region.endMs) / TRANSITION_WINDOW_MS);
-  return 1 - easeOutCubic(progress);
+  return 1 - easeInOutCubic(progress);
 }
 
 function getLinearFocus(start: ZoomFocus, end: ZoomFocus, amount: number): ZoomFocus {
