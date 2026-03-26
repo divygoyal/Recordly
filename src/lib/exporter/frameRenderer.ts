@@ -831,7 +831,7 @@ export class FrameRenderer {
 
         let targetRotX = 0;
         let targetRotY = 0;
-        let fov = 0.7854;
+        let fov = 0.5236; // 30° default (FocuSee)
         if (is3D) {
           const target = compute3DTransform(zoom3d!, activeFocus, activeProgress);
           targetRotX = target.rotateX * target.strength;

@@ -131,11 +131,11 @@ const FRAGMENT = /* glsl */ `
 /** Corner radius matching FocuSee's backgroundRound (~0.04) */
 const DEFAULT_CORNER_RADIUS = 0.038;
 
-/** Default FOV in radians (~45°) */
-const DEFAULT_FOV = 1.3090; // 75° in radians
+/** Default FOV in radians (30° — matching FocuSee's CreateAtPoint) */
+const DEFAULT_FOV = 0.5236; // 30° in radians
 
 /** Extra padding so warped pixels aren't clipped at edges */
-const FILTER_PADDING = 250;
+const FILTER_PADDING = 300;
 
 export class PerspectiveWarpFilter extends Filter {
   constructor(rendererResolution?: number) {

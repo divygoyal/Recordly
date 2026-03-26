@@ -12,17 +12,18 @@ function makeConfig(
   return { enabled, intensity };
 }
 
+const DEG2RAD = Math.PI / 180;
+
 describe("compute3DTransform", () => {
-  it("returns near-zero rotation when focus is at center", () => {
-    const { rotateX, rotateY, strength } = compute3DTransform(
-      makeConfig(0.5),
+  it("always tilts backward (negative rotateX) even at center", () => {
+    const { rotateX, rotateY } = compute3DTransform(
+      makeConfig(1.0),
       { cx: 0.5, cy: 0.5 },
       1,
     );
-    // Center focus is in dead zone — no rotation
-    expect(Math.abs(rotateX)).toBeLessThan(0.01);
-    expect(Math.abs(rotateY)).toBeLessThan(0.01);
-    expect(strength).toBeGreaterThanOrEqual(0);
+    // FocuSee: RotateX = -15° at center, RotateY = 0°
+    expect(rotateX).toBeCloseTo(-15 * DEG2RAD, 2);
+    expect(rotateY).toBeCloseTo(0, 3);
   });
 
   it("yaws when focus is on the left edge (left tilts away)", () => {
@@ -31,8 +32,9 @@ describe("compute3DTransform", () => {
       { cx: 0.1, cy: 0.5 },
       1,
     );
-    // Focus left of center → positive rotateY (left tilts away, right comes forward)
+    // Focus left → positive rotateY
     expect(rotateY).toBeGreaterThan(0);
+    expect(rotateY).toBeCloseTo(0.4 * 40 * DEG2RAD, 2); // dx=-0.4, yaw=+16°
   });
 
   it("yaws when focus is on the right edge (right tilts away)", () => {
@@ -41,31 +43,43 @@ describe("compute3DTransform", () => {
       { cx: 0.9, cy: 0.5 },
       1,
     );
-    // Focus right of center → negative rotateY (right tilts away)
+    // Focus right → negative rotateY
     expect(rotateY).toBeLessThan(0);
+    expect(rotateY).toBeCloseTo(-0.4 * 40 * DEG2RAD, 2); // dx=0.4, yaw=-16°
   });
 
-  it("pitches when focus is near the top (top tilts away)", () => {
+  it("pitches more backward when focus is near top", () => {
     const { rotateX } = compute3DTransform(
       makeConfig(1),
       { cx: 0.5, cy: 0.1 },
       1,
     );
-    // Focus top → negative rotateX (top tilts away)
-    expect(rotateX).toBeLessThan(0);
+    // FocuSee: RotateX = -15 + (0.5-0.1)*6 = -15 + 2.4 = -12.6°
+    expect(rotateX).toBeCloseTo(-12.6 * DEG2RAD, 2);
   });
 
-  it("pitches when focus is near the bottom (bottom tilts away)", () => {
+  it("pitches more backward when focus is near bottom", () => {
     const { rotateX } = compute3DTransform(
       makeConfig(1),
       { cx: 0.5, cy: 0.9 },
       1,
     );
-    // Focus bottom → positive rotateX (bottom tilts away, top comes forward)
-    expect(rotateX).toBeGreaterThan(0);
+    // FocuSee: RotateX = -15 + (0.5-0.9)*6 = -15 - 2.4 = -17.4°
+    expect(rotateX).toBeCloseTo(-17.4 * DEG2RAD, 2);
   });
 
-  it("higher intensity produces stronger effect", () => {
+  it("matches FocuSee at (0.75, 0.25)", () => {
+    const { rotateX, rotateY } = compute3DTransform(
+      makeConfig(1),
+      { cx: 0.75, cy: 0.25 },
+      1,
+    );
+    // FocuSee weak: RX=-13.5°, RY=-10°
+    expect(rotateX).toBeCloseTo(-13.5 * DEG2RAD, 2);
+    expect(rotateY).toBeCloseTo(-10 * DEG2RAD, 2);
+  });
+
+  it("higher intensity produces stronger strength value", () => {
     const low = compute3DTransform(makeConfig(0.2), { cx: 0.1, cy: 0.5 }, 1);
     const high = compute3DTransform(makeConfig(0.8), { cx: 0.1, cy: 0.5 }, 1);
     expect(Math.abs(high.strength)).toBeGreaterThan(Math.abs(low.strength));
@@ -97,28 +111,30 @@ describe("compute3DTransform", () => {
       { cx: 0.5, cy: 0.5 },
       1,
     );
-    // 60° in radians ≈ 1.047
     expect(fov).toBeCloseTo(Math.PI / 3, 3);
   });
 
-  it("defaults to 75° fov when not specified", () => {
+  it("defaults to 30° fov when not specified", () => {
     const { fov } = compute3DTransform(
       makeConfig(0.5),
       { cx: 0.5, cy: 0.5 },
       1,
     );
-    expect(fov).toBeCloseTo((75 * Math.PI) / 180, 3);
+    expect(fov).toBeCloseTo((30 * Math.PI) / 180, 3);
   });
 
-  it("rotation magnitude stays within MAX_ROTATION", () => {
-    // Corner focus = maximum distance from center
-    const { rotateX, rotateY } = compute3DTransform(
-      makeConfig(1),
+  it("rotateX always negative (backward tilt) across all positions", () => {
+    const positions = [
       { cx: 0.0, cy: 0.0 },
-      1,
-    );
-    const magnitude = Math.sqrt(rotateX * rotateX + rotateY * rotateY);
-    expect(magnitude).toBeLessThanOrEqual(0.61); // MAX_ROTATION = 0.60
+      { cx: 0.5, cy: 0.5 },
+      { cx: 1.0, cy: 1.0 },
+      { cx: 0.75, cy: 0.25 },
+      { cx: 0.25, cy: 0.75 },
+    ];
+    for (const focus of positions) {
+      const { rotateX } = compute3DTransform(makeConfig(1), focus, 1);
+      expect(rotateX).toBeLessThan(0);
+    }
   });
 });
 

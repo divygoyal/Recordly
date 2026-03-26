@@ -1344,7 +1344,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             // Compute target rotation (0 when not active)
             let targetRotX = 0;
             let targetRotY = 0;
-            let fov = 0.7854; // 45° default
+            let fov = 0.5236; // 30° default (FocuSee)
             if (is3D) {
               const target = compute3DTransform(
                 zoom3d!,

@@ -1,32 +1,34 @@
 /**
  * 3D perspective transform — FocuSee-style camera rotation from focus position.
  *
- * Matches FocuSee's Trans3DCommand architecture: computes RotateX (pitch),
- * RotateY (yaw), and FOV for a proper 3D camera projection.
+ * Matches FocuSee's Trans3DCommand architecture exactly, using rotation
+ * formulas reverse-engineered from TransformMatrix.CreateAtPoint().
  *
- * FocuSee convention: focused area tilts AWAY from the viewer (into the screen),
- * the opposite side comes forward — like looking down at a tablet on a desk.
+ * FocuSee's key insight: the screen ALWAYS tilts backward (negative RotateX)
+ * like a tablet lying on a desk. Yaw (RotateY) shifts based on horizontal
+ * focus offset. This creates the distinctive "floating tablet" look.
  *
- *   focus on right side  → rotateY < 0 → right side tilts away
- *   focus on top         → rotateX < 0 → top tilts away
- *   focus near center    → minimal rotation (mostly scale zoom)
+ * FocuSee "weak" effect formulas (from CreateAtPoint):
+ *   RotateX = -15 + (0.5 - cy) * 6  degrees (always negative = backward tilt)
+ *   RotateY = -(cx - 0.5) * 40       degrees (proportional to horizontal offset)
+ *   FOV     = 30°
  */
 
 import type { Zoom3DConfig, ZoomFocus } from "../types";
 import type { PerspectiveWarpFilter } from "./perspectiveWarpFilter";
 
-// ── Constants ──────────────────────────────────────────────
+// ── Constants (from FocuSee "weak" effect) ─────────────────
 
-/** Maximum rotation in radians (~34°). After dead-zone and intensity scaling,
- *  effective max is ~17-20° matching FocuSee's dramatic visible 3D tilt. */
-const MAX_ROTATION = 0.60;
+const DEG2RAD = Math.PI / 180;
 
-/**
- * Dead zone around center where rotation is minimal. Focus within this
- * radius from (0.5, 0.5) produces no rotation — just like FocuSee
- * which barely tilts when zooming near the center.
- */
-const CENTER_DEAD_ZONE = 0.02;
+/** Base backward pitch — always applied, creates "tablet on desk" look */
+const BASE_PITCH_DEG = -15;
+
+/** How much vertical focus offset modulates the pitch (degrees per unit dy) */
+const PITCH_Y_SCALE_DEG = 6;
+
+/** Yaw scale: degrees per unit horizontal offset from center */
+const YAW_X_SCALE_DEG = 40;
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -46,40 +48,35 @@ export interface Transform3DResult {
 /**
  * Compute 3D camera rotation from zoom focus position, config, and progress.
  *
- * Returns TARGET rotation angles (not yet scaled by progress). The caller
- * or spring animation system handles transition smoothing.
+ * Uses FocuSee's exact CreateAtPoint formulas:
+ *   RotateX = BASE_PITCH + (0.5 - cy) * PITCH_Y_SCALE  (always backward)
+ *   RotateY = -(cx - 0.5) * YAW_X_SCALE                (horizontal offset)
+ *
+ * Returns TARGET rotation angles. Spring animation handles smoothing.
  */
 export function compute3DTransform(
   config: Zoom3DConfig,
   focus: ZoomFocus,
   progress: number,
 ): Transform3DResult {
-  const fov = ((config.fov ?? 75) * Math.PI) / 180;
+  const fov = ((config.fov ?? 30) * Math.PI) / 180;
 
   if (!config.enabled || progress <= 0 || config.intensity <= 0) {
     return { rotateX: 0, rotateY: 0, fov, strength: 0 };
   }
 
-  const dx = focus.cx - 0.5;
-  const dy = focus.cy - 0.5;
-  const dist = Math.sqrt(dx * dx + dy * dy);
+  const dx = focus.cx - 0.5; // positive = right of center
+  const dy = focus.cy - 0.5; // positive = below center
+
   const strength = progress * config.intensity;
 
-  // Dead zone — no rotation near center
-  if (dist < CENTER_DEAD_ZONE) {
-    return { rotateX: 0, rotateY: 0, fov, strength };
-  }
-
-  // Scale rotation by distance from center (further = more rotation)
-  const effectiveDist = Math.min(
-    (dist - CENTER_DEAD_ZONE) / (0.5 - CENTER_DEAD_ZONE),
-    1,
-  );
-  const scale = (effectiveDist * MAX_ROTATION) / dist;
+  // FocuSee "weak" effect formulas (reverse-engineered from CreateAtPoint)
+  const rotateXDeg = BASE_PITCH_DEG + (0.5 - focus.cy) * PITCH_Y_SCALE_DEG;
+  const rotateYDeg = -dx * YAW_X_SCALE_DEG;
 
   return {
-    rotateY: -dx * scale, // focus right (dx>0) → negative yaw → right tilts away
-    rotateX: dy * scale, // focus top (dy<0) → negative pitch → top tilts away
+    rotateX: rotateXDeg * DEG2RAD,
+    rotateY: rotateYDeg * DEG2RAD,
     fov,
     strength,
   };

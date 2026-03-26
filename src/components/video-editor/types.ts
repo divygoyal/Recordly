@@ -337,14 +337,14 @@ export interface Zoom3DConfig {
   enabled: boolean;
   /** 0–1 intensity of the perspective tilt (default 0.5). */
   intensity: number;
-  /** Field of view in degrees (default 45). Higher = stronger perspective. */
+  /** Field of view in degrees (default 30, matching FocuSee). Lower = stronger perspective. */
   fov?: number;
 }
 
 export const DEFAULT_ZOOM_3D_CONFIG: Zoom3DConfig = {
   enabled: true,
   intensity: 1.0,
-  fov: 75,
+  fov: 30,
 };
 
 export function clampFocusToDepth(
