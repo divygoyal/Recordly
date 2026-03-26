@@ -140,13 +140,15 @@ function createPlaybackAnimationState(): PlaybackAnimationState {
   };
 }
 
-/** Spring config for 3D perspective rotation — FocuSee-style camera swing. */
+/** Spring config for 3D perspective rotation — FocuSee-style camera swing.
+ *  Critically damped (ratio ≈ 1.06) to avoid oscillation that would cause
+ *  filter flicker at zoom boundaries. */
 const PERSP_SPRING_CONFIG: SpringConfig = {
   stiffness: 200,
-  damping: 22,
+  damping: 30,
   mass: 1.0,
-  restDelta: 0.0001,
-  restSpeed: 0.005,
+  restDelta: 0.001,
+  restSpeed: 0.01,
 };
 
 function getEffectiveNativeAspectRatio(
@@ -321,6 +323,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
     const perspectiveFilterRef = useRef<PerspectiveWarpFilter | null>(null);
     const perspSpringXRef = useRef(createSpringState(0));
     const perspSpringYRef = useRef(createSpringState(0));
+    const perspFilterActiveRef = useRef(false);
     const spotlightRef = useRef<HTMLDivElement | null>(null);
     const showShadowRef = useRef(showShadow);
     const shadowIntensityRef = useRef(shadowIntensity);
@@ -1319,12 +1322,12 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
         state.appliedScale = appliedTransform.scale;
 
         // ── Unified filter management ─────────────────────────
-        // Build filter arrays for video and camera containers.
-        // Motion blur applies to video only; perspective applies to
-        // cameraContainer so both video AND cursor get the same 3D warp.
+        // Perspective filter goes on videoContainer (NOT cameraContainer)
+        // so the cursor overlay in sibling cursorContainer is not affected
+        // by the filter's FILTER_PADDING offset. Cursor is drawn on top of
+        // the 3D-warped video, matching FocuSee's rendering model.
         const vc = videoContainerRef.current;
-        const cc = cameraContainerRef.current;
-        if (vc && cc) {
+        if (vc) {
           const videoFilters: import("pixi.js").Filter[] = [];
 
           // Motion blur: check if the filter has active velocity
@@ -1337,9 +1340,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
           }
 
           // 3D perspective with spring animation (FocuSee-style camera swing)
-          // Applied to cameraContainer so cursor is warped along with video.
           const perspFilter = perspectiveFilterRef.current;
-          let cameraFilters: import("pixi.js").Filter[] | null = null;
           if (perspFilter) {
             const zoom3d = activeRegion?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
             const deltaMs = appRef.current?.ticker.deltaMS ?? 16;
@@ -1375,19 +1376,25 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             );
 
             const hasRotation =
-              Math.abs(springRotX) > 0.0001 ||
-              Math.abs(springRotY) > 0.0001;
+              Math.abs(springRotX) > 0.001 ||
+              Math.abs(springRotY) > 0.001;
 
-            // FocuSee-style floating card: always apply filter during zoom
-            // for rounded corners + content inset; add perspective when rotating
-            const isZoomActive = zoomProgress > 0.01;
-            if (isZoomActive || hasRotation) {
+            // Hysteresis: once activated, keep filter on until zoom fully exits
+            // and spring has settled. Prevents rapid on/off toggling that causes
+            // PixiJS render target rebuilds (visual glitches).
+            const wasActive = perspFilterActiveRef.current;
+            const shouldActivate = zoomProgress > 0.05 || hasRotation;
+            const shouldDeactivate = zoomProgress < 0.001 && !hasRotation;
+            const isActive = wasActive ? !shouldDeactivate : shouldActivate;
+            perspFilterActiveRef.current = isActive;
+
+            if (isActive) {
               perspFilter.rotateX = springRotX;
               perspFilter.rotateY = springRotY;
               perspFilter.fov = fov;
               // Content inset creates the "floating card" look with dark background padding
               perspFilter.contentInset = zoomProgress * 0.10;
-              cameraFilters = [perspFilter];
+              videoFilters.push(perspFilter);
             }
 
             // Spotlight background dimming
@@ -1418,9 +1425,13 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             }
           }
 
-          // Motion blur on video only; perspective on camera (warps video + cursor together)
-          vc.filters = videoFilters.length > 0 ? videoFilters : null;
-          cc.filters = cameraFilters;
+          // Only update .filters when the effective count changes (avoids
+          // redundant PixiJS render-target rebuilds that cause glitches).
+          const newCount = videoFilters.length;
+          const oldCount = (vc.filters as import("pixi.js").Filter[] | null)?.length ?? 0;
+          if (newCount !== oldCount || newCount > 0) {
+            vc.filters = newCount > 0 ? videoFilters : null;
+          }
         }
       };
 
