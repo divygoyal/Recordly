@@ -323,6 +323,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
     const perspectiveFilterRef = useRef<PerspectiveWarpFilter | null>(null);
     const perspSpringXRef = useRef(createSpringState(0));
     const perspSpringYRef = useRef(createSpringState(0));
+    const perspSpringZRef = useRef(createSpringState(0));
     const perspFilterActiveRef = useRef(false);
     const spotlightRef = useRef<HTMLDivElement | null>(null);
     const showShadowRef = useRef(showShadow);
@@ -1208,6 +1209,14 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
       if (cursorOverlayRef.current) {
         cursorContainer.addChild(cursorOverlayRef.current.container);
       }
+      // Ensure cursor renders ON TOP of video sprite (it was added to
+      // videoContainer earlier in init, before videoSprite existed).
+      if (cursorContainer.parent === videoContainer) {
+        videoContainer.setChildIndex(
+          cursorContainer,
+          videoContainer.children.length - 1,
+        );
+      }
 
       animationStateRef.current = createPlaybackAnimationState();
 
@@ -1352,6 +1361,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             // Compute target rotation (0 when not active)
             let targetRotX = 0;
             let targetRotY = 0;
+            let targetRotZ = 0;
             let fov = 0.5236; // 30° default (FocuSee)
             if (is3D) {
               const target = compute3DTransform(
@@ -1361,6 +1371,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
               );
               targetRotX = target.rotateX * target.strength;
               targetRotY = target.rotateY * target.strength;
+              targetRotZ = target.rotateZ * target.strength;
               fov = target.fov;
             }
 
@@ -1377,10 +1388,17 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
               deltaMs,
               PERSP_SPRING_CONFIG,
             );
+            const springRotZ = stepSpringValue(
+              perspSpringZRef.current,
+              targetRotZ,
+              deltaMs,
+              PERSP_SPRING_CONFIG,
+            );
 
             const hasRotation =
               Math.abs(springRotX) > 0.001 ||
-              Math.abs(springRotY) > 0.001;
+              Math.abs(springRotY) > 0.001 ||
+              Math.abs(springRotZ) > 0.001;
 
             // Hysteresis: once activated, keep filter on until zoom fully exits
             // and spring has settled. Prevents rapid on/off toggling that causes
@@ -1394,9 +1412,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             if (isActive) {
               perspFilter.rotateX = springRotX;
               perspFilter.rotateY = springRotY;
+              perspFilter.rotateZ = springRotZ;
               perspFilter.fov = fov;
-              // Content inset creates the "floating card" look with dark background padding
-              perspFilter.contentInset = zoomProgress * 0.10;
+              // Content inset creates the "floating card" look (FocuSee uses 0.05)
+              perspFilter.contentInset = zoomProgress * 0.05;
               videoFilters.push(perspFilter);
             }
 

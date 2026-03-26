@@ -49,6 +49,7 @@ const FRAGMENT = /* glsl */ `
   uniform sampler2D uTexture;
   uniform float uRotateX;       // pitch (radians): negative = top tilts away (FocuSee convention)
   uniform float uRotateY;       // yaw (radians): negative = right side tilts away (FocuSee convention)
+  uniform float uRotateZ;       // roll (radians): subtle card tilt
   uniform float uFov;           // field of view (radians): controls perspective strength
   uniform float uCornerRadius;
   uniform float uContentInset;  // 0.0–0.15: shrinks content to create floating card padding
@@ -70,13 +71,17 @@ const FRAGMENT = /* glsl */ `
     // Ray from camera through this pixel
     vec3 rayDir = vec3(screen.x * ps, screen.y * ps, 1.0);
 
-    // Rotation matrix R = Ry * Rx
-    float cx = cos(uRotateX), sx = sin(uRotateX);
-    float cy = cos(uRotateY), sy = sin(uRotateY);
+    // Rotation matrix R = Rz * Ry * Rx (roll * yaw * pitch)
+    float cX = cos(uRotateX), sX = sin(uRotateX);
+    float cY = cos(uRotateY), sY = sin(uRotateY);
+    float cZ = cos(uRotateZ), sZ = sin(uRotateZ);
 
-    // Surface normal after rotation: R * (0,0,1)
-    // R = {{cy, sy*sx, sy*cx}, {0, cx, -sx}, {-sy, cy*sx, cy*cx}}
-    vec3 normal = vec3(sy * cx, -sx, cy * cx);
+    // Surface normal after rotation: third column of R = Rz * Ry * Rx
+    vec3 normal = vec3(
+      sY * cX * cZ + sX * sZ,
+      sY * cX * sZ - sX * cZ,
+      cY * cX
+    );
 
     // Surface center at z=1 (normalized)
     vec3 center = vec3(0.0, 0.0, 1.0);
@@ -97,9 +102,11 @@ const FRAGMENT = /* glsl */ `
     vec3 hit = rayDir * t;
     vec3 offset = hit - center;
 
-    // Transform back to surface-local coords via R^T
-    float localX = cy * offset.x - sy * offset.z;
-    float localY = sy * sx * offset.x + cx * offset.y + cy * sx * offset.z;
+    // Transform back to surface-local coords via R^T (transpose of R = Rz*Ry*Rx)
+    float localX = cY * cZ * offset.x + cY * sZ * offset.y + (-sY) * offset.z;
+    float localY = (sY * sX * cZ - cX * sZ) * offset.x
+                 + (sY * sX * sZ + cX * cZ) * offset.y
+                 + cY * sX * offset.z;
 
     // Map to UV [0, 1] — divide by 2*ps to normalize (identity when rotation=0)
     vec2 texUV = vec2(localX, localY) / (2.0 * ps) + 0.5;
@@ -128,8 +135,8 @@ const FRAGMENT = /* glsl */ `
   }
 `;
 
-/** Corner radius matching FocuSee's backgroundRound (~0.04) */
-const DEFAULT_CORNER_RADIUS = 0.045;
+/** Corner radius matching FocuSee's backgroundRound (0.04) */
+const DEFAULT_CORNER_RADIUS = 0.04;
 
 /** Default FOV in radians (30° — matching FocuSee's CreateAtPoint) */
 const DEFAULT_FOV = 0.5236; // 30° in radians
@@ -151,6 +158,7 @@ export class PerspectiveWarpFilter extends Filter {
         perspectiveUniforms: {
           uRotateX: { value: 0, type: "f32" },
           uRotateY: { value: 0, type: "f32" },
+          uRotateZ: { value: 0, type: "f32" },
           uFov: { value: DEFAULT_FOV, type: "f32" },
           uCornerRadius: { value: DEFAULT_CORNER_RADIUS, type: "f32" },
           uContentInset: { value: 0, type: "f32" },
@@ -176,6 +184,14 @@ export class PerspectiveWarpFilter extends Filter {
   }
   get rotateY(): number {
     return this.resources.perspectiveUniforms.uniforms.uRotateY as number;
+  }
+
+  /** Roll rotation in radians: subtle card tilt. */
+  set rotateZ(v: number) {
+    this.resources.perspectiveUniforms.uniforms.uRotateZ = v;
+  }
+  get rotateZ(): number {
+    return this.resources.perspectiveUniforms.uniforms.uRotateZ as number;
   }
 
   /** Field of view in radians (controls perspective strength). */

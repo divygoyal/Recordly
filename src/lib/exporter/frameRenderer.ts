@@ -154,6 +154,7 @@ export class FrameRenderer {
   private motionBlurState: MotionBlurState;
   private perspSpringX: SpringState;
   private perspSpringY: SpringState;
+  private perspSpringZ: SpringState;
   private lastFrameTimeMs = 0;
   private lastSpringRotX = 0;
   private lastSpringRotY = 0;
@@ -178,6 +179,7 @@ export class FrameRenderer {
     this.motionBlurState = createMotionBlurState();
     this.perspSpringX = createSpringState(0);
     this.perspSpringY = createSpringState(0);
+    this.perspSpringZ = createSpringState(0);
   }
 
   async initialize(): Promise<void> {
@@ -749,6 +751,13 @@ export class FrameRenderer {
       if (this.maskGraphics) {
         this.videoContainer.addChild(this.maskGraphics);
       }
+      // Ensure cursor renders ON TOP of video sprite
+      if (this.cursorContainer.parent === this.videoContainer) {
+        this.videoContainer.setChildIndex(
+          this.cursorContainer,
+          this.videoContainer.children.length - 1,
+        );
+      }
     } else {
       this.videoTextureSource ??= this.videoSprite.texture.source as TextureSource<any>;
       this.videoTextureSource.resource = videoFrame as any;
@@ -833,26 +842,30 @@ export class FrameRenderer {
 
         let targetRotX = 0;
         let targetRotY = 0;
+        let targetRotZ = 0;
         let fov = 0.5236; // 30° default (FocuSee)
         if (is3D) {
           const target = compute3DTransform(zoom3d!, activeFocus, activeProgress);
           targetRotX = target.rotateX * target.strength;
           targetRotY = target.rotateY * target.strength;
+          targetRotZ = target.rotateZ * target.strength;
           fov = target.fov;
         }
 
         const springRotX = stepSpringValue(this.perspSpringX, targetRotX, deltaMs, PERSP_SPRING_CONFIG);
         const springRotY = stepSpringValue(this.perspSpringY, targetRotY, deltaMs, PERSP_SPRING_CONFIG);
+        const springRotZ = stepSpringValue(this.perspSpringZ, targetRotZ, deltaMs, PERSP_SPRING_CONFIG);
         this.lastSpringRotX = springRotX;
         this.lastSpringRotY = springRotY;
 
-        const hasRotation = Math.abs(springRotX) > 0.0001 || Math.abs(springRotY) > 0.0001;
+        const hasRotation = Math.abs(springRotX) > 0.0001 || Math.abs(springRotY) > 0.0001 || Math.abs(springRotZ) > 0.0001;
         const isZoomActive = activeProgress > 0.01;
         if (isZoomActive || hasRotation) {
           this.perspectiveFilter.rotateX = springRotX;
           this.perspectiveFilter.rotateY = springRotY;
+          this.perspectiveFilter.rotateZ = springRotZ;
           this.perspectiveFilter.fov = fov;
-          this.perspectiveFilter.contentInset = activeProgress * 0.10;
+          this.perspectiveFilter.contentInset = activeProgress * 0.05;
           filters.push(this.perspectiveFilter);
         }
       }
