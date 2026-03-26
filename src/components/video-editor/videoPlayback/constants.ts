@@ -1,8 +1,9 @@
 import type { ZoomFocus } from "../types";
 
 export const DEFAULT_FOCUS: ZoomFocus = { cx: 0.5, cy: 0.5 };
-// FocuSee zoom-out: 600ms window with easeInOutCubic for smooth departure
-export const TRANSITION_WINDOW_MS = 600;
+// FocuSee zoom-out: 1000ms window with easeOutCubic decay — matches
+// overdamped spring (ζ=1.107): immediate departure → progressive deceleration
+export const TRANSITION_WINDOW_MS = 1000;
 export const ZOOM_IN_TRANSITION_WINDOW_MS = 500;
 export const MIN_DELTA = 0.0001;
 export const VIEWPORT_SCALE = 0.8;

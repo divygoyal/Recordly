@@ -1452,12 +1452,21 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             vc.filters = newCount > 0 ? videoFilters : null;
           }
 
-          // Re-enable squircle mask if it was disabled — mask provides
-          // rounded corners on the video card (applied BEFORE the 3D filter).
+          // Mask must be DISABLED during zoom: PixiJS v8 applies mask BEFORE
+          // filter, so the squircle clips 2D content before the 3D projection.
+          // When the card tilts, the near side extends beyond the mask boundary,
+          // causing visible content loss. Re-enable mask when not zoomed for
+          // 2D rounded corners.
           const mg = maskGraphicsRef.current;
-          if (mg && vc.mask !== mg) {
-            mg.visible = true;
-            vc.mask = mg;
+          const filtersActive = videoFilters.length > 0;
+          if (mg) {
+            if (filtersActive && vc.mask === mg) {
+              vc.mask = null;
+              mg.visible = false;
+            } else if (!filtersActive && vc.mask !== mg) {
+              mg.visible = true;
+              vc.mask = mg;
+            }
           }
         }
       };

@@ -875,11 +875,18 @@ export class FrameRenderer {
 
       this.videoContainer.filters = filters.length > 0 ? filters : null;
 
-      // Re-enable squircle mask if it was disabled — mask provides
-      // rounded corners on the video card (applied BEFORE the 3D filter).
-      if (this.maskGraphics && this.videoContainer.mask !== this.maskGraphics) {
-        this.maskGraphics.visible = true;
-        this.videoContainer.mask = this.maskGraphics;
+      // Mask must be DISABLED during zoom: PixiJS v8 applies mask BEFORE
+      // filter, so the squircle clips content before 3D projection.
+      // Re-enable mask when not zoomed for 2D rounded corners.
+      const filtersActive = filters.length > 0;
+      if (this.maskGraphics) {
+        if (filtersActive && this.videoContainer.mask === this.maskGraphics) {
+          this.videoContainer.mask = null;
+          this.maskGraphics.visible = false;
+        } else if (!filtersActive && this.videoContainer.mask !== this.maskGraphics) {
+          this.maskGraphics.visible = true;
+          this.videoContainer.mask = this.maskGraphics;
+        }
       }
     }
 
