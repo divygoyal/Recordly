@@ -55,7 +55,7 @@ export function updateOverlayIndicator(params: OverlayUpdateParams) {
     ? baseMask.y + (baseMask.height - indicatorHeight) / 2
     : Math.max(baseMask.y, Math.min(baseMask.y + baseMask.height - indicatorHeight, rawTop));
 
-  indicatorEl.style.display = 'block';
+  indicatorEl.style.display = isPlaying ? 'none' : 'block';
   indicatorEl.style.width = `${indicatorWidth}px`;
   indicatorEl.style.height = `${indicatorHeight}px`;
   indicatorEl.style.left = `${adjustedLeft}px`;

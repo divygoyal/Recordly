@@ -1439,12 +1439,16 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
           // When perspective filter is active, disable the squircle mask so the
           // shader's SDF handles all corner rounding (the hard mask clips edges
           // before the shader runs, overriding its soft rounded corners).
+          // Also hide the Graphics child so it doesn't render as a visible
+          // white rectangle when no longer used as a mask.
           const mg = maskGraphicsRef.current;
           if (mg) {
             const perspActive = perspFilterActiveRef.current;
             if (perspActive && vc.mask === mg) {
               vc.mask = null;
+              mg.visible = false;
             } else if (!perspActive && vc.mask === null) {
+              mg.visible = true;
               vc.mask = mg;
             }
           }
