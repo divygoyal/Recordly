@@ -123,13 +123,15 @@ function createAnimationState(): AnimationState {
   };
 }
 
-/** Spring config for 3D perspective — must match VideoPlayback.tsx */
+/** Spring config for 3D perspective — must match VideoPlayback.tsx.
+ *  FocuSee's AnimationManager screen spring: tension=170, friction=50, mass=3.
+ *  Overdamped (ζ ≈ 1.107) for gentle camera swing. */
 const PERSP_SPRING_CONFIG: SpringConfig = {
   stiffness: 170,
-  damping: 26,
-  mass: 1.0,
-  restDelta: 0.001,
-  restSpeed: 0.01,
+  damping: 50,
+  mass: 3.0,
+  restDelta: 0.0005,
+  restSpeed: 0.005,
 };
 
 // Renders video frames with all effects (background, zoom, crop, blur, shadow) to an offscreen canvas for export.
@@ -846,7 +848,8 @@ export class FrameRenderer {
         let targetRotZ = 0;
         let fov = 0.5236; // 30° default (FocuSee)
         if (is3D) {
-          const target = compute3DTransform(zoom3d!, activeFocus, activeProgress);
+          // Step target: full rotation immediately (FocuSee architecture)
+          const target = compute3DTransform(zoom3d!, activeFocus, 1.0);
           targetRotX = target.rotateX * target.strength;
           targetRotY = target.rotateY * target.strength;
           targetRotZ = target.rotateZ * target.strength;
@@ -863,8 +866,8 @@ export class FrameRenderer {
         this.perspectiveFilter.rotateY = springRotY;
         this.perspectiveFilter.rotateZ = springRotZ;
         this.perspectiveFilter.fov = fov;
-        // Static 5% base padding (FocuSee backgroundPadding) + dynamic 12% during zoom
-        this.perspectiveFilter.contentInset = 0.05 + activeProgress * 0.12;
+        // Static 5% padding (FocuSee backgroundPadding=0.05), no dynamic increase
+        this.perspectiveFilter.contentInset = 0.05;
         filters.push(this.perspectiveFilter);
       }
       this.lastFrameTimeMs = timeMs;

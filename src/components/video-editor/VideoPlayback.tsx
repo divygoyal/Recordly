@@ -139,15 +139,16 @@ function createPlaybackAnimationState(): PlaybackAnimationState {
   };
 }
 
-/** Spring config for 3D perspective rotation — FocuSee-style camera swing.
- *  Slightly underdamped (ratio ≈ 0.99) for subtle organic overshoot that
- *  makes the camera feel alive, like FocuSee's SpringTransform. */
+/** Spring config for 3D perspective rotation — matches FocuSee's AnimationManager
+ *  screen spring (field O59QI): tension=170, friction=50, mass=3.
+ *  Overdamped (ζ ≈ 1.107) so rotation slowly approaches target, reaching ~77%
+ *  at 400ms. This creates FocuSee's signature gentle camera swing. */
 const PERSP_SPRING_CONFIG: SpringConfig = {
   stiffness: 170,
-  damping: 26,
-  mass: 1.0,
-  restDelta: 0.001,
-  restSpeed: 0.01,
+  damping: 50,
+  mass: 3.0,
+  restDelta: 0.0005,
+  restSpeed: 0.005,
 };
 
 function getEffectiveNativeAspectRatio(
@@ -1360,16 +1361,19 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             const deltaMs = appRef.current?.ticker.deltaMS ?? 16;
             const is3D = is3DZoomActive(zoom3d, zoomProgress);
 
-            // Compute target rotation (0 when not active)
+            // Compute target rotation — FocuSee uses STEP targets: full rotation
+            // immediately when zoom starts, 0 when zoom ends. The overdamped spring
+            // handles all smoothing (reaches ~77% at 400ms, ~96% at 800ms).
             let targetRotX = 0;
             let targetRotY = 0;
             let targetRotZ = 0;
             let fov = 0.5236; // 30° default (FocuSee)
             if (is3D) {
+              // Pass progress=1.0 to get FULL rotation target immediately
               const target = compute3DTransform(
                 zoom3d!,
                 focus,
-                zoomProgress,
+                1.0,
               );
               targetRotX = target.rotateX * target.strength;
               targetRotY = target.rotateY * target.strength;
@@ -1401,8 +1405,8 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             perspFilter.rotateY = springRotY;
             perspFilter.rotateZ = springRotZ;
             perspFilter.fov = fov;
-            // Static 5% base padding (FocuSee backgroundPadding) + dynamic 12% during zoom
-            perspFilter.contentInset = 0.05 + zoomProgress * 0.12;
+            // Static 5% padding (FocuSee backgroundPadding=0.05), no dynamic increase
+            perspFilter.contentInset = 0.05;
             videoFilters.push(perspFilter);
             perspFilterActiveRef.current = true;
 
