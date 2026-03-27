@@ -225,8 +225,16 @@ bool MFEncoder::finalize() {
     nv12Buffer_.clear();
     nv12Buffer_.shrink_to_fit();
 
-    if (!sinkWriter_) return false;
+    if (!sinkWriter_) {
+        std::cerr << "ERROR: Encoder finalize called but sinkWriter is null" << std::endl;
+        MFShutdown();
+        return false;
+    }
+
     HRESULT hr = sinkWriter_->Finalize();
+    if (FAILED(hr)) {
+        std::cerr << "ERROR: SinkWriter Finalize failed: 0x" << std::hex << hr << std::dec << std::endl;
+    }
     sinkWriter_.Reset();
     MFShutdown();
     return SUCCEEDED(hr);

@@ -13,6 +13,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <chrono>
+#include <cstdio>
 
 static std::atomic<bool> g_stopRequested{false};
 static std::atomic<bool> g_pauseRequested{false};
@@ -310,9 +311,19 @@ int main(int argc, char* argv[]) {
     session.stopCapture();
     if (audioActive) loopback.stop();
     if (micActive) micCapture.stop();
-    encoder.finalize();
+
+    bool finalizeOk = encoder.finalize();
+    if (!finalizeOk) {
+        std::cerr << "ERROR: Encoder finalize failed — output file may be corrupt" << std::endl;
+    }
+
+    // Flush all C runtime file buffers to ensure data hits disk before ExitProcess
+    _flushall();
 
     std::cout << "Recording stopped. Output path: " << config.outputPath << std::endl;
+    if (!finalizeOk) {
+        std::cout << "Recording finalize failed" << std::endl;
+    }
     if (audioActive) {
         std::cout << "Audio path: " << config.audioOutputPath << std::endl;
     }
@@ -325,5 +336,5 @@ int main(int argc, char* argv[]) {
     Sleep(100);
 
     // Fast exit to avoid WinRT/COM teardown crashes during apartment cleanup
-    ExitProcess(0);
+    ExitProcess(finalizeOk ? 0 : 2);
 }

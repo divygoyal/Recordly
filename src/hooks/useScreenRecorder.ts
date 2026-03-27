@@ -394,7 +394,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
         window.electronAPI?.setRecordingState(false);
 
         if (!result.success || !result.path) {
-          console.error("Failed to stop native screen recording:", result.error ?? result.message);
+          const msg = result.message ?? result.error ?? "Failed to stop native screen recording";
+          console.error("Failed to stop native screen recording:", msg);
+          toast.error(msg);
           return;
         }
 

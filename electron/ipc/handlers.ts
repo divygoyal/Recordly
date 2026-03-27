@@ -170,6 +170,42 @@ function normalizePath(filePath: string) {
   return path.resolve(filePath)
 }
 
+/**
+ * Quick validation that an MP4 file has a moov atom (required for playback).
+ * Reads the first 256KB + last 256KB and searches for the 'moov' box type.
+ * Returns true if the file appears to have valid MP4 metadata.
+ */
+async function validateMp4HasMoov(filePath: string): Promise<boolean> {
+  try {
+    const fh = await fs.open(filePath, 'r')
+    try {
+      const stat = await fh.stat()
+      if (stat.size < 8) return false
+
+      // Check start of file (covers fast-start MP4s and small files)
+      const headSize = Math.min(262144, stat.size)
+      const headBuf = Buffer.alloc(headSize)
+      await fh.read(headBuf, 0, headSize, 0)
+      const moovSig = Buffer.from('moov', 'ascii')
+      if (headBuf.includes(moovSig)) return true
+
+      // Check end of file (standard MP4 puts moov after mdat)
+      if (stat.size > headSize) {
+        const tailSize = Math.min(262144, stat.size - headSize)
+        const tailBuf = Buffer.alloc(tailSize)
+        await fh.read(tailBuf, 0, tailSize, stat.size - tailSize)
+        if (tailBuf.includes(moovSig)) return true
+      }
+
+      return false
+    } finally {
+      await fh.close()
+    }
+  } catch {
+    return false
+  }
+}
+
 function normalizeDesktopSourceName(value: string) {
   return value.trim().replace(/\s+/g, ' ').toLowerCase()
 }
@@ -1719,10 +1755,12 @@ function waitForWindowsCaptureStop(proc: ChildProcessWithoutNullStreams) {
       cleanup()
       const match = windowsCaptureOutputBuffer.match(/Recording stopped\. Output path: (.+)/)
       if (match?.[1]) {
+        // Even if finalize failed (exit code 2), we resolve with the path
+        // so the caller can validate the file — the moov check will catch corruption
         resolve(match[1].trim())
         return
       }
-      if (code === 0 && windowsCaptureTargetPath) {
+      if ((code === 0 || code === 2) && windowsCaptureTargetPath) {
         resolve(windowsCaptureTargetPath)
         return
       }
@@ -3223,6 +3261,23 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
         }
 
         windowsPendingVideoPath = finalVideoPath
+
+        // Validate that the MP4 has a moov atom (encoder finalize may have failed)
+        if (finalVideoPath.endsWith('.mp4')) {
+          const hasMoov = await validateMp4HasMoov(finalVideoPath)
+          if (!hasMoov) {
+            const stderrHint = windowsCaptureOutputBuffer.includes('ERROR:')
+              ? ` (capture stderr: ${windowsCaptureOutputBuffer.substring(windowsCaptureOutputBuffer.indexOf('ERROR:'), windowsCaptureOutputBuffer.indexOf('ERROR:') + 120)})`
+              : ''
+            console.error(`[stop-native-screen-recording] MP4 file is missing moov atom — encoder finalize likely failed${stderrHint}: ${finalVideoPath}`)
+            return {
+              success: false,
+              message: 'Recording file is corrupt (encoder failed to finalize). Please try recording again.',
+              error: 'MP4_MISSING_MOOV',
+            }
+          }
+        }
+
         return { success: true, path: finalVideoPath }
       } catch (error) {
         console.error('Failed to stop native Windows capture:', error)
