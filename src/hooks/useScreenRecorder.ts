@@ -271,9 +271,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
       await window.electronAPI.setCurrentVideoPath(videoPath);
     }
 
-    // Brief delay so OS file-system cache can flush the recording to disk
-    // before the editor window tries to load it.
-    await new Promise<void>((resolve) => setTimeout(resolve, 500));
+    // Delay so OS file-system cache can flush and the muxer can finish
+    // writing the container metadata (moov atom for MP4).  500 ms was
+    // too short on some machines → DEMUXER_ERROR_COULD_NOT_OPEN.
+    await new Promise<void>((resolve) => setTimeout(resolve, 1500));
 
     await window.electronAPI.switchToEditor();
   }, []);

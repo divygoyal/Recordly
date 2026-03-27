@@ -136,8 +136,10 @@ type PendingExportSave = {
 const MP4_EXPORT_FRAME_RATE = 60;
 const INITIAL_VIDEO_SOURCE_RETRY_COUNT = 20;
 const INITIAL_VIDEO_SOURCE_RETRY_DELAY_MS = 500;
-const VIDEO_PLAYBACK_RETRY_LIMIT = 5;
+const VIDEO_PLAYBACK_RETRY_LIMIT = 8;
 const MIN_VALID_VIDEO_FILE_SIZE = 4096;
+/** How long to wait between two size reads to confirm the file is stable (not still being written). */
+const FILE_STABILITY_WAIT_MS = 400;
 
 function cloneStructured<T>(value: T): T {
 	return globalThis.structuredClone(value);
@@ -176,8 +178,21 @@ async function resolveReadyVideoSourcePath(
 	for (let attempt = 0; attempt <= retries; attempt += 1) {
 		const result = await checkFileExists(sourcePath);
 		if (result.exists && result.size >= MIN_VALID_VIDEO_FILE_SIZE) {
-			console.log(`[resolveReady] File ready on attempt ${attempt}: "${sourcePath}" (${result.size} bytes)`);
-			return sourcePath;
+			// File exists and has data — verify it's stable (muxer finished
+			// writing). A partially-written MP4 can exceed 4 KB long before
+			// the moov atom is written, causing DEMUXER_ERROR_COULD_NOT_OPEN.
+			await waitForDelay(FILE_STABILITY_WAIT_MS);
+			const recheck = await checkFileExists(sourcePath);
+			if (recheck.exists && recheck.size === result.size) {
+				console.log(
+					`[resolveReady] File ready on attempt ${attempt}: "${sourcePath}" (${recheck.size} bytes, stable)`,
+				);
+				return sourcePath;
+			}
+			// Size changed — file still being written, keep retrying
+			console.log(
+				`[resolveReady] File still growing on attempt ${attempt}: ${result.size} → ${recheck.size} bytes`,
+			);
 		}
 
 		if (attempt < retries) {
@@ -1300,11 +1315,15 @@ export default function VideoEditor() {
 					attempts: priorAttempts + 1,
 				};
 
+				// Progressive delay: wait longer on each retry (500→750→1000→…)
+				// to give the muxer more time to finish writing.
+				const progressiveDelay = INITIAL_VIDEO_SOURCE_RETRY_DELAY_MS + priorAttempts * 250;
+
 				const recoveredSourcePath = await resolveReadyVideoSourcePath(
 					currentSourcePath,
 					{
 						retries: INITIAL_VIDEO_SOURCE_RETRY_COUNT,
-						delayMs: INITIAL_VIDEO_SOURCE_RETRY_DELAY_MS,
+						delayMs: progressiveDelay,
 					},
 				);
 
