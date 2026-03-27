@@ -53,6 +53,13 @@ const FRAGMENT = /* glsl */ `
   uniform float uFov;           // field of view (radians)
   uniform float uCornerRadius;  // corner rounding in UV space (FocuSee: 0.04)
   uniform float uContentInset;  // inset for floating card padding (FocuSee: 0.05)
+  // Content bounds within the padded filter texture.
+  // FILTER_PADDING adds extra pixels around the container — these uniforms
+  // tell the SDF where the actual video content sits (0-1 = full texture).
+  uniform float uContentMinX;
+  uniform float uContentMinY;
+  uniform float uContentMaxX;
+  uniform float uContentMaxY;
 
   // Signed distance to a rounded rectangle centered at origin.
   // b = half-size, r = corner radius. Returns negative inside, positive outside.
@@ -101,18 +108,27 @@ const FRAGMENT = /* glsl */ `
 
     vec2 texUV = vec2(localX, localY) / (2.0 * ps) + 0.5;
 
-    if (texUV.x < -0.05 || texUV.x > 1.05 || texUV.y < -0.05 || texUV.y > 1.05) {
+    // Remap texUV from padded-texture space to content-local space.
+    // texUV 0-1 spans the entire padded filter texture; contentUV 0-1
+    // spans only the actual video content within that texture.
+    vec2 contentMin = vec2(uContentMinX, uContentMinY);
+    vec2 contentMax = vec2(uContentMaxX, uContentMaxY);
+    vec2 contentSize = contentMax - contentMin;
+    vec2 contentUV = (texUV - contentMin) / contentSize;
+
+    // Early-out: discard pixels well outside the video content area
+    if (contentUV.x < -0.1 || contentUV.x > 1.1 || contentUV.y < -0.1 || contentUV.y > 1.1) {
       finalColor = vec4(0.0);
       return;
     }
 
-    // Rounded rect SDF on the projected video surface.
-    // The card goes from (inset, inset) to (1-inset, 1-inset) in UV space.
+    // Rounded rect SDF on content-local coordinates.
+    // The card spans from (inset, inset) to (1-inset, 1-inset) in content UV.
     float inset = uContentInset;
     float halfW = 0.5 - inset;
     float halfH = 0.5 - inset;
     float cr = uCornerRadius;
-    vec2 cardCenter = texUV - 0.5;
+    vec2 cardCenter = contentUV - 0.5;
     float dist = roundedBoxSDF(cardCenter, vec2(halfW, halfH), cr);
 
     // Anti-aliased edge: smooth transition over ~1px in UV space
@@ -124,6 +140,7 @@ const FRAGMENT = /* glsl */ `
       return;
     }
 
+    // Sample the texture using the original (padded) texUV, not contentUV
     vec2 sampleUV = clamp(texUV, 0.0, 1.0);
     vec4 texColor = texture(uTexture, sampleUV);
     finalColor = texColor * alpha;
@@ -157,6 +174,10 @@ export class PerspectiveWarpFilter extends Filter {
           uFov: { value: DEFAULT_FOV, type: "f32" },
           uCornerRadius: { value: DEFAULT_CORNER_RADIUS, type: "f32" },
           uContentInset: { value: 0, type: "f32" },
+          uContentMinX: { value: 0, type: "f32" },
+          uContentMinY: { value: 0, type: "f32" },
+          uContentMaxX: { value: 1, type: "f32" },
+          uContentMaxY: { value: 1, type: "f32" },
         },
       },
       padding: FILTER_PADDING,
@@ -211,5 +232,14 @@ export class PerspectiveWarpFilter extends Filter {
   }
   get contentInset(): number {
     return this.resources.perspectiveUniforms.uniforms.uContentInset as number;
+  }
+
+  /** Set content bounds within the padded filter texture (accounts for FILTER_PADDING). */
+  setContentBounds(minX: number, minY: number, maxX: number, maxY: number) {
+    const u = this.resources.perspectiveUniforms.uniforms;
+    u.uContentMinX = minX;
+    u.uContentMinY = minY;
+    u.uContentMaxX = maxX;
+    u.uContentMaxY = maxY;
   }
 }

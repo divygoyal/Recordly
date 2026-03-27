@@ -77,7 +77,7 @@ import {
   createMotionBlurState,
   type MotionBlurState,
 } from "./videoPlayback/zoomTransform";
-import { PerspectiveWarpFilter } from "./videoPlayback/perspectiveWarpFilter";
+import { PerspectiveWarpFilter, FILTER_PADDING } from "./videoPlayback/perspectiveWarpFilter";
 import {
   compute3DTransform,
   is3DZoomActive,
@@ -1409,6 +1409,24 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             // floating card inset (ramps with zoom for the "lifted card" look).
             perspFilter.cornerRadius = 0.04;
             perspFilter.contentInset = 0.05 * zoomProgress;
+
+            // Tell the shader where the video content sits within the
+            // padded filter texture so the SDF operates on video bounds,
+            // not the FILTER_PADDING area.
+            const vidDims = lockedVideoDimensionsRef.current;
+            const bScale = baseScaleRef.current;
+            if (vidDims && bScale > 0) {
+              const dispW = vidDims.width * bScale;
+              const dispH = vidDims.height * bScale;
+              const padW = dispW + 2 * FILTER_PADDING;
+              const padH = dispH + 2 * FILTER_PADDING;
+              perspFilter.setContentBounds(
+                FILTER_PADDING / padW,
+                FILTER_PADDING / padH,
+                (FILTER_PADDING + dispW) / padW,
+                (FILTER_PADDING + dispH) / padH,
+              );
+            }
 
             // Only activate the filter when there's actual zoom — when not
             // zooming the 2D squircle mask provides rounded corners and the
