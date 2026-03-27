@@ -1406,7 +1406,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             perspFilter.rotateY = springRotY * zoomProgress;
             perspFilter.rotateZ = springRotZ * zoomProgress;
             perspFilter.fov = fov;
-            perspFilter.contentInset = 0;
+            // Rounded corners + floating card inset — applied in the shader
+            // via SDF so they follow the 3D perspective naturally.
+            perspFilter.cornerRadius = 0.04 * zoomProgress;
+            perspFilter.contentInset = 0.05 * zoomProgress;
             videoFilters.push(perspFilter);
             perspFilterActiveRef.current = true;
 
@@ -1453,7 +1456,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
           // Mask must be DISABLED during zoom: PixiJS v8 applies mask BEFORE
           // filter, so the squircle clips 2D content before the 3D projection.
-          // Rounding is handled by the CSS clip-path on the floating card.
+          // Rounding is now handled by the shader SDF — no CSS clip needed.
           const mg = maskGraphicsRef.current;
           if (mg) {
             if (vc.mask === mg) {
@@ -1462,19 +1465,11 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             }
           }
 
-          // Canvas background: NO border-radius (sharp edges).
-          // Floating card: CSS clip-path with inset + round during zoom
-          // creates the rounded 3D card look without clipping at canvas edges.
+          // Ensure no CSS clipping interferes with the shader-based rounding
           const canvasEl = appRef.current?.canvas as HTMLCanvasElement | undefined;
           if (canvasEl) {
             canvasEl.style.borderRadius = "0";
-            if (zoomProgress > 0.01) {
-              const insetPct = 2.5 * zoomProgress; // 5% total (2.5% each side)
-              const radius = Math.round(20 * zoomProgress);
-              canvasEl.style.clipPath = `inset(${insetPct.toFixed(2)}% round ${radius}px)`;
-            } else {
-              canvasEl.style.clipPath = "none";
-            }
+            canvasEl.style.clipPath = "none";
           }
         }
       };

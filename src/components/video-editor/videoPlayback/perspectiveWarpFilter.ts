@@ -51,8 +51,15 @@ const FRAGMENT = /* glsl */ `
   uniform float uRotateY;       // yaw (radians): negative = right side tilts away
   uniform float uRotateZ;       // roll (radians): subtle card tilt
   uniform float uFov;           // field of view (radians)
-  uniform float uCornerRadius;  // kept for uniform compat
-  uniform float uContentInset;  // kept for uniform compat
+  uniform float uCornerRadius;  // corner rounding in UV space (FocuSee: 0.04)
+  uniform float uContentInset;  // inset for floating card padding (FocuSee: 0.05)
+
+  // Signed distance to a rounded rectangle centered at origin.
+  // b = half-size, r = corner radius. Returns negative inside, positive outside.
+  float roundedBoxSDF(vec2 p, vec2 b, float r) {
+    vec2 d = abs(p) - b + r;
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
+  }
 
   void main(void) {
     vec2 screen = (vTextureCoord - 0.5) * 2.0;
@@ -99,8 +106,27 @@ const FRAGMENT = /* glsl */ `
       return;
     }
 
+    // Rounded rect SDF on the projected video surface.
+    // The card goes from (inset, inset) to (1-inset, 1-inset) in UV space.
+    float inset = uContentInset;
+    float halfW = 0.5 - inset;
+    float halfH = 0.5 - inset;
+    float cr = uCornerRadius;
+    vec2 cardCenter = texUV - 0.5;
+    float dist = roundedBoxSDF(cardCenter, vec2(halfW, halfH), cr);
+
+    // Anti-aliased edge: smooth transition over ~1px in UV space
+    float feather = fwidth(dist) * 1.2;
+    float alpha = 1.0 - smoothstep(-feather, feather, dist);
+
+    if (alpha < 0.001) {
+      finalColor = vec4(0.0);
+      return;
+    }
+
     vec2 sampleUV = clamp(texUV, 0.0, 1.0);
-    finalColor = texture(uTexture, sampleUV);
+    vec4 texColor = texture(uTexture, sampleUV);
+    finalColor = texColor * alpha;
   }
 `;
 
