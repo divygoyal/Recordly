@@ -140,3 +140,32 @@ export function getZoomSpringConfig(): SpringConfig {
     restSpeed: 0.015,
   };
 }
+
+/**
+ * Underdamped perspective spring — gives "camera landing" feel with slight
+ * overshoot + settle. ζ = 26/(2√(200×1.8)) ≈ 0.686 → ~5% overshoot.
+ * Much more cinematic than the previous overdamped config (ζ=1.107).
+ */
+export function getPerspectiveSpringConfig(): SpringConfig {
+  return {
+    stiffness: 200,
+    damping: 26,
+    mass: 1.8,
+    restDelta: 0.0005,
+    restSpeed: 0.005,
+  };
+}
+
+/**
+ * Underdamped zoom scale spring — zoom "punches" in with slight overshoot
+ * then settles. ζ = 22/(2√(280×0.8)) ≈ 0.735 → subtle scale bounce.
+ */
+export function getZoomScaleSpringConfig(): SpringConfig {
+  return {
+    stiffness: 280,
+    damping: 22,
+    mass: 0.8,
+    restDelta: 0.0005,
+    restSpeed: 0.015,
+  };
+}

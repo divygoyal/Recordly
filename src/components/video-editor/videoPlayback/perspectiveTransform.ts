@@ -32,19 +32,22 @@ const DEG2RAD = Math.PI / 180;
 /**
  * Pitch interpolation endpoints — minPitch at cy=0, maxPitch at cy=1.
  * FocuSee computes: RotateX = minPitch + cy * (maxPitch - minPitch)
+ * Widened from original (-30,-25) for stronger 3D depth feel.
  */
-const MIN_PITCH_DEG = -30; // pitch at cy=0 (top of screen → steeper tilt)
-const MAX_PITCH_DEG = -25; // pitch at cy=1 (bottom of screen → shallower tilt)
+const MIN_PITCH_DEG = -38; // pitch at cy=0 (top of screen → steeper tilt)
+const MAX_PITCH_DEG = -18; // pitch at cy=1 (bottom of screen → shallower tilt)
 
 /**
  * Yaw interpolation: RotateY = maxYaw + cx * (minYaw - maxYaw)
- * At cx=0: maxYaw=20°, at cx=1: minYaw=-20°
+ * At cx=0: maxYaw=28°, at cx=1: minYaw=-28°
+ * Widened from original (±20) for more dynamic horizontal rotation.
  */
-const MAX_YAW_DEG = 20;
-const MIN_YAW_DEG = -20;
+const MAX_YAW_DEG = 28;
+const MIN_YAW_DEG = -28;
 
-/** Roll factor: RotateZ = (cx-0.5)*2 * cy * ROLL_FACTOR */
-const ROLL_FACTOR_DEG = -4;
+/** Roll factor: RotateZ = (cx-0.5)*2 * cy * ROLL_FACTOR
+ * Increased from -4 for more visible card tilt. */
+const ROLL_FACTOR_DEG = -6;
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -78,7 +81,7 @@ export function compute3DTransform(
   focus: ZoomFocus,
   progress: number,
 ): Transform3DResult {
-  const fov = ((config.fov ?? 30) * Math.PI) / 180;
+  const fov = ((config.fov ?? 25) * Math.PI) / 180;
 
   if (!config.enabled || progress <= 0 || config.intensity <= 0) {
     return { rotateX: 0, rotateY: 0, rotateZ: 0, fov, strength: 0 };

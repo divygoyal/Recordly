@@ -21,8 +21,8 @@ describe("compute3DTransform", () => {
       { cx: 0.5, cy: 0.5 },
       1,
     );
-    // FocuSee normal: RotateX = -30 + 0.5*5 = -27.5°, RotateY = 0°, RotateZ = 0°
-    expect(rotateX).toBeCloseTo(-27.5 * DEG2RAD, 2);
+    // Widened pitch: RotateX = -38 + 0.5*20 = -28°, RotateY = 0°, RotateZ = 0°
+    expect(rotateX).toBeCloseTo(-28 * DEG2RAD, 2);
     expect(rotateY).toBeCloseTo(0, 3);
     expect(rotateZ).toBeCloseTo(0, 3);
   });
@@ -34,9 +34,9 @@ describe("compute3DTransform", () => {
       1,
     );
     // Focus left → negative rotateY (left side closer in our shader convention)
-    // FocuSee RotateY = 20 + 0.1*(-40) = 16°, negated for shader = -16°
+    // RotateY = -(28 + 0.1*(-56)) = -22.4°
     expect(rotateY).toBeLessThan(0);
-    expect(rotateY).toBeCloseTo(-16 * DEG2RAD, 2);
+    expect(rotateY).toBeCloseTo(-22.4 * DEG2RAD, 2);
   });
 
   it("yaws when focus is on the right edge (right side toward camera)", () => {
@@ -46,9 +46,9 @@ describe("compute3DTransform", () => {
       1,
     );
     // Focus right → positive rotateY (right side closer in our shader convention)
-    // FocuSee RotateY = 20 + 0.9*(-40) = -16°, negated for shader = +16°
+    // RotateY = -(28 + 0.9*(-56)) = 22.4°
     expect(rotateY).toBeGreaterThan(0);
-    expect(rotateY).toBeCloseTo(16 * DEG2RAD, 2);
+    expect(rotateY).toBeCloseTo(22.4 * DEG2RAD, 2);
   });
 
   it("pitches more backward when focus is near top", () => {
@@ -57,8 +57,8 @@ describe("compute3DTransform", () => {
       { cx: 0.5, cy: 0.1 },
       1,
     );
-    // FocuSee normal: RotateX = -30 + 0.1*5 = -29.5°
-    expect(rotateX).toBeCloseTo(-29.5 * DEG2RAD, 2);
+    // RotateX = -38 + 0.1*20 = -36°
+    expect(rotateX).toBeCloseTo(-36 * DEG2RAD, 2);
   });
 
   it("pitches less backward when focus is near bottom", () => {
@@ -67,20 +67,20 @@ describe("compute3DTransform", () => {
       { cx: 0.5, cy: 0.9 },
       1,
     );
-    // FocuSee normal: RotateX = -30 + 0.9*5 = -25.5°
-    expect(rotateX).toBeCloseTo(-25.5 * DEG2RAD, 2);
+    // RotateX = -38 + 0.9*20 = -20°
+    expect(rotateX).toBeCloseTo(-20 * DEG2RAD, 2);
   });
 
-  it("matches FocuSee normal at (0.75, 0.25)", () => {
+  it("matches expected values at (0.75, 0.25)", () => {
     const { rotateX, rotateY, rotateZ } = compute3DTransform(
       makeConfig(1),
       { cx: 0.75, cy: 0.25 },
       1,
     );
-    // FocuSee normal: RX=-28.75°, RY=-10° (negated for shader = +10°), RZ=-0.5°
-    expect(rotateX).toBeCloseTo(-28.75 * DEG2RAD, 2);
-    expect(rotateY).toBeCloseTo(10 * DEG2RAD, 2);
-    expect(rotateZ).toBeCloseTo(-0.5 * DEG2RAD, 2);
+    // RX=-33°, RY=14° (negated for shader), RZ=-0.75°
+    expect(rotateX).toBeCloseTo(-33 * DEG2RAD, 2);
+    expect(rotateY).toBeCloseTo(14 * DEG2RAD, 2);
+    expect(rotateZ).toBeCloseTo(-0.75 * DEG2RAD, 2);
   });
 
   it("computes roll (rotateZ) based on position", () => {
@@ -89,8 +89,8 @@ describe("compute3DTransform", () => {
       { cx: 0.0, cy: 1.0 },
       1,
     );
-    // RZ = (0-0.5)*2*1.0*(-4) = (-1)*1*(-4) = 4°
-    expect(rotateZ).toBeCloseTo(4 * DEG2RAD, 2);
+    // RZ = (0-0.5)*2*1.0*(-6) = 6°
+    expect(rotateZ).toBeCloseTo(6 * DEG2RAD, 2);
   });
 
   it("roll is zero at center x", () => {
@@ -149,13 +149,13 @@ describe("compute3DTransform", () => {
     expect(fov).toBeCloseTo(Math.PI / 3, 3);
   });
 
-  it("defaults to 30° fov when not specified", () => {
+  it("defaults to 25° fov when not specified", () => {
     const { fov } = compute3DTransform(
       makeConfig(0.5),
       { cx: 0.5, cy: 0.5 },
       1,
     );
-    expect(fov).toBeCloseTo((30 * Math.PI) / 180, 3);
+    expect(fov).toBeCloseTo((25 * Math.PI) / 180, 3);
   });
 
   it("rotateX always negative (backward tilt) across all positions", () => {

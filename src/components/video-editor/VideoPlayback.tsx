@@ -72,6 +72,7 @@ import {
 } from "./videoPlayback/renderQuality";
 import {
   applyZoomTransform,
+  applyRuleOfThirdsOffset,
   computeFocusFromTransform,
   computeZoomTransform,
   createMotionBlurState,
@@ -85,7 +86,7 @@ import {
 import {
   createSpringState,
   stepSpringValue,
-  type SpringConfig,
+  getPerspectiveSpringConfig,
 } from "./videoPlayback/motionSmoothing";
 import { createVideoEventHandlers } from "./videoPlayback/videoEventHandlers";
 import {
@@ -139,17 +140,10 @@ function createPlaybackAnimationState(): PlaybackAnimationState {
   };
 }
 
-/** Spring config for 3D perspective rotation — matches FocuSee's AnimationManager
- *  screen spring (field O59QI): tension=170, friction=50, mass=3.
- *  Overdamped (ζ ≈ 1.107) so rotation slowly approaches target, reaching ~77%
- *  at 400ms. This creates FocuSee's signature gentle camera swing. */
-const PERSP_SPRING_CONFIG: SpringConfig = {
-  stiffness: 170,
-  damping: 50,
-  mass: 3.0,
-  restDelta: 0.0005,
-  restSpeed: 0.005,
-};
+/** Underdamped perspective spring — gives "camera landing" feel with ~5%
+ *  overshoot + settle. ζ ≈ 0.686 (underdamped). Much more cinematic than
+ *  the previous overdamped config. */
+const PERSP_SPRING_CONFIG = getPerspectiveSpringConfig();
 
 function getEffectiveNativeAspectRatio(
   dimensions: { width: number; height: number } | null | undefined,
@@ -1397,6 +1391,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
         // Don't pass videoContainer — we manage filters ourselves below
         // to avoid the conflict where applyZoomTransform wipes perspective filter
+        const framed = applyRuleOfThirdsOffset(focus.cx, focus.cy);
         const appliedTransform = applyZoomTransform({
           cameraContainer,
           videoContainer: undefined,
@@ -1405,8 +1400,8 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
           baseMask: baseMaskRef.current,
           zoomScale: state.scale,
           zoomProgress: state.progress,
-          focusX: focus.cx,
-          focusY: focus.cy,
+          focusX: framed.focusX,
+          focusY: framed.focusY,
           motionIntensity,
           motionVector,
           isPlaying: isPlayingRef.current,
@@ -1463,7 +1458,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             let targetRotX = 0;
             let targetRotY = 0;
             let targetRotZ = 0;
-            let fov = 0.5236; // 30° default (FocuSee)
+            let fov = 0.4363; // 25° — narrower FOV for stronger perspective depth
             if (is3D) {
               // Pass progress=1.0 to get FULL rotation target immediately
               const target = compute3DTransform(
@@ -1502,12 +1497,13 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             perspFilter.rotateY = springRotY * zoomProgress;
             perspFilter.rotateZ = springRotZ * zoomProgress;
             perspFilter.fov = fov;
-            // Rounded corners (constant 0.04 = FocuSee's backgroundRound) +
-            // floating card inset (ramps with zoom for the "lifted card" look).
             perspFilter.cornerRadius = 0.04;
             perspFilter.contentInset = 0.05 * zoomProgress;
+            // Depth layers: vignette darkens edges, spotlight brightens focus
+            perspFilter.vignetteStrength = 0.3 * zoomProgress;
+            perspFilter.focusBrightness = 0.12 * zoomProgress;
+            perspFilter.focusCenter = [focus.cx, focus.cy];
 
-            // ── DIAGNOSTIC: set debugMode=0 for normal rendering, 1 for passthrough
             perspFilter.debugMode = 0;
 
             // Only activate the filter when there's actual zoom — when not

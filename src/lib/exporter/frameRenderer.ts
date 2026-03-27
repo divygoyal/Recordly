@@ -24,6 +24,7 @@ import { getAssetPath, getRenderableAssetUrl } from "@/lib/assetPath";
 import { findDominantRegion } from "@/components/video-editor/videoPlayback/zoomRegionUtils";
 import {
   applyZoomTransform,
+  applyRuleOfThirdsOffset,
   computeFocusFromTransform,
   computeZoomTransform,
   createMotionBlurState,
@@ -37,8 +38,8 @@ import {
 import {
   createSpringState,
   stepSpringValue,
+  getPerspectiveSpringConfig,
   type SpringState,
-  type SpringConfig,
 } from "@/components/video-editor/videoPlayback/motionSmoothing";
 import {
   DEFAULT_FOCUS,
@@ -123,16 +124,9 @@ function createAnimationState(): AnimationState {
   };
 }
 
-/** Spring config for 3D perspective — must match VideoPlayback.tsx.
- *  FocuSee's AnimationManager screen spring: tension=170, friction=50, mass=3.
- *  Overdamped (ζ ≈ 1.107) for gentle camera swing. */
-const PERSP_SPRING_CONFIG: SpringConfig = {
-  stiffness: 170,
-  damping: 50,
-  mass: 3.0,
-  restDelta: 0.0005,
-  restSpeed: 0.005,
-};
+/** Underdamped perspective spring — must match VideoPlayback.tsx.
+ *  ζ ≈ 0.686 (underdamped) for cinematic overshoot + settle. */
+const PERSP_SPRING_CONFIG = getPerspectiveSpringConfig();
 
 // Renders video frames with all effects (background, zoom, crop, blur, shadow) to an offscreen canvas for export.
 
@@ -797,6 +791,10 @@ export class FrameRenderer {
 
     // Apply transform once with maximum motion intensity from all ticks
     // Don't pass videoContainer — we manage filters in unified block below
+    const framedExport = applyRuleOfThirdsOffset(
+      this.animationState.focusX,
+      this.animationState.focusY,
+    );
     applyZoomTransform({
       cameraContainer: this.cameraContainer,
       blurFilter: null,
@@ -808,8 +806,8 @@ export class FrameRenderer {
       baseMask: this.layoutCache.maskRect,
       zoomScale: this.animationState.scale,
       zoomProgress: this.animationState.progress,
-      focusX: this.animationState.focusX,
-      focusY: this.animationState.focusY,
+      focusX: framedExport.focusX,
+      focusY: framedExport.focusY,
       motionIntensity: maxMotionIntensity,
       motionVector: this.lastMotionVector,
       isPlaying: true,
@@ -823,22 +821,26 @@ export class FrameRenderer {
       frameTimeMs: timeMs,
     });
 
-    // ── Unified filter management ─────────────────────────
-    // Build filter array once per frame to avoid quality fluctuation
+    // ── Filter management: perspective on SPRITE, motion blur on CONTAINER ──
+    // Perspective filter goes on videoSprite directly — PixiJS computes
+    // filter texture bounds from the target's getFastGlobalBounds().
+    // A Sprite's bounds are simple (texture dims × groupTransform),
+    // whereas a Container with effects (mask/filter) uses a complex
+    // bounds path that can produce incorrect near-zero values.
     if (this.videoContainer) {
-      const filters: import("pixi.js").Filter[] = [];
+      const containerFilters: import("pixi.js").Filter[] = [];
+      const spriteFilters: import("pixi.js").Filter[] = [];
 
-      // Motion blur: check if filter has active velocity
+      // Motion blur: stays on videoContainer (applies to all children)
       if (this.motionBlurFilter && hasActiveMotionBlur(this.config.zoomMotionBlur ?? 0)) {
         const vel = this.motionBlurFilter.velocity as { x: number; y: number };
         if (vel.x !== 0 || vel.y !== 0) {
-          filters.push(this.motionBlurFilter);
+          containerFilters.push(this.motionBlurFilter);
         }
       }
 
       // 3D perspective with spring animation — only active during zoom.
-      // The 2D squircle mask handles corners when not zoomed; the shader
-      // SDF handles them during 3D rotation.
+      // Applied to videoSprite (not videoContainer) to get correct filter bounds.
       if (this.perspectiveFilter) {
         const zoom3d = activeRegion?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
         const deltaMs = Math.max(1, timeMs - this.lastFrameTimeMs);
@@ -847,9 +849,8 @@ export class FrameRenderer {
         let targetRotX = 0;
         let targetRotY = 0;
         let targetRotZ = 0;
-        let fov = 0.5236; // 30° default (FocuSee)
+        let fov = 0.4363; // 25° — narrower FOV for stronger perspective depth
         if (is3D) {
-          // Step target: full rotation immediately (FocuSee architecture)
           const target = compute3DTransform(zoom3d!, activeFocus, 1.0);
           targetRotX = target.rotateX * target.strength;
           targetRotY = target.rotateY * target.strength;
@@ -863,34 +864,33 @@ export class FrameRenderer {
         this.lastSpringRotX = springRotX;
         this.lastSpringRotY = springRotY;
 
-        // Gate rotation by activeProgress (matches FocuSee's Animation.Info.Alpha gating)
         this.perspectiveFilter.rotateX = springRotX * activeProgress;
         this.perspectiveFilter.rotateY = springRotY * activeProgress;
         this.perspectiveFilter.rotateZ = springRotZ * activeProgress;
         this.perspectiveFilter.fov = fov;
-        // Rounded corners (constant 0.04 = FocuSee's backgroundRound) +
-        // floating card inset (ramps with zoom for the "lifted card" look).
         this.perspectiveFilter.cornerRadius = 0.04;
         this.perspectiveFilter.contentInset = 0.05 * activeProgress;
+        // Depth layers: vignette darkens edges, spotlight brightens focus
+        this.perspectiveFilter.vignetteStrength = 0.3 * activeProgress;
+        this.perspectiveFilter.focusBrightness = 0.12 * activeProgress;
+        this.perspectiveFilter.focusCenter = [activeFocus.cx, activeFocus.cy];
 
-        // SDF operates directly on frame-space texUV — no content bounds
-        // remapping. clipToViewport=false ensures full container bounds.
-
-        // Only activate filter during actual zoom — when not zooming, the
-        // 2D squircle mask provides corners and the filter's FILTER_PADDING
-        // breaks the identity coordinate mapping.
         if (activeProgress > 0) {
-          filters.push(this.perspectiveFilter);
+          spriteFilters.push(this.perspectiveFilter);
         }
       }
       this.lastFrameTimeMs = timeMs;
 
-      this.videoContainer.filters = filters.length > 0 ? filters : null;
+      // Apply filters to correct targets
+      this.videoContainer.filters = containerFilters.length > 0 ? containerFilters : null;
+      if (this.videoSprite) {
+        this.videoSprite.filters = spriteFilters.length > 0 ? spriteFilters : null;
+      }
 
       // Mask must be DISABLED during zoom: PixiJS v8 applies mask BEFORE
       // filter, so the squircle clips content before 3D projection.
       // Re-enable mask when not zoomed for 2D rounded corners.
-      const filtersActive = filters.length > 0;
+      const filtersActive = spriteFilters.length > 0;
       if (this.maskGraphics) {
         if (filtersActive && this.videoContainer.mask === this.maskGraphics) {
           this.videoContainer.mask = null;
@@ -1424,6 +1424,10 @@ export class FrameRenderer {
     this.maskGraphics = null;
     this.motionBlurFilter?.destroy();
     this.motionBlurFilter = null;
+    // Clear sprite filters before destroying the filter
+    if (this.videoSprite != null) {
+      (this.videoSprite as Sprite).filters = null;
+    }
     this.perspectiveFilter?.destroy();
     this.perspectiveFilter = null;
     if (this.cursorOverlay) {

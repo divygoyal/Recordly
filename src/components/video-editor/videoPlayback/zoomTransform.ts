@@ -1,9 +1,44 @@
 import { Container, BlurFilter } from 'pixi.js';
 import { MotionBlurFilter } from 'pixi-filters/motion-blur';
 
-const PEAK_VELOCITY_PPS = 2000;
-const MAX_BLUR_PX = 8;
-const VELOCITY_THRESHOLD_PPS = 15;
+const PEAK_VELOCITY_PPS = 1500;
+const MAX_BLUR_PX = 16;
+const VELOCITY_THRESHOLD_PPS = 8;
+
+/** Maximum rule-of-thirds focus offset (5% of normalized coordinates). */
+const ROT_MAX_OFFSET = 0.05;
+
+/**
+ * Apply rule-of-thirds offset to focus position. When the cursor is near
+ * the edges, shift the focus toward the nearest 1/3 line for cinematic
+ * composition. In the center zone (0.3–0.7), no offset is applied.
+ */
+export function applyRuleOfThirdsOffset(
+  focusX: number,
+  focusY: number,
+): { focusX: number; focusY: number } {
+  const offsetX = computeThirdsOffset(focusX);
+  const offsetY = computeThirdsOffset(focusY);
+  return {
+    focusX: Math.max(0, Math.min(1, focusX + offsetX)),
+    focusY: Math.max(0, Math.min(1, focusY + offsetY)),
+  };
+}
+
+function computeThirdsOffset(v: number): number {
+  // Center dead zone: no offset when cursor is between 0.3 and 0.7
+  if (v >= 0.3 && v <= 0.7) return 0;
+
+  // Near left/top edge (0–0.3): shift toward 1/3 line (0.333)
+  if (v < 0.3) {
+    const edgeDist = (0.3 - v) / 0.3; // 0 at 0.3, 1 at 0
+    return ROT_MAX_OFFSET * edgeDist; // positive = push toward 1/3
+  }
+
+  // Near right/bottom edge (0.7–1): shift toward 2/3 line (0.667)
+  const edgeDist = (v - 0.7) / 0.3; // 0 at 0.7, 1 at 1.0
+  return -ROT_MAX_OFFSET * edgeDist; // negative = push toward 2/3
+}
 
 export interface MotionBlurState {
   lastFrameTimeMs: number;
@@ -206,7 +241,7 @@ export function applyZoomTransform({
       const normalised = Math.min(1, speed / PEAK_VELOCITY_PPS);
       const targetBlur = speed < VELOCITY_THRESHOLD_PPS
         ? 0
-        : normalised * normalised * MAX_BLUR_PX * motionBlurAmount;
+        : Math.pow(normalised, 1.5) * MAX_BLUR_PX * motionBlurAmount;
 
       if (targetBlur > 0) {
         // Active motion — attach filter and set velocity

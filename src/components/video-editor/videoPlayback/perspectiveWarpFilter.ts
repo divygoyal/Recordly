@@ -61,6 +61,9 @@ const FRAGMENT = /* glsl */ `
   uniform float uCornerRadius;  // corner rounding in UV space (FocuSee: 0.04)
   uniform float uContentInset;  // inset for floating card padding (FocuSee: 0.05)
   uniform float uDebugMode;     // 0=normal, 1=passthrough (diagnostic)
+  uniform float uVignetteStrength; // 0–0.5: darkens card edges during zoom
+  uniform float uFocusBrightness; // 0–0.2: brightens area near focus point
+  uniform vec2  uFocusCenter;     // focus position in UV space (cx, cy)
 
   // Signed distance to a rounded rectangle centered at origin.
   // b = half-size, r = corner radius. Returns negative inside, positive outside.
@@ -161,6 +164,22 @@ const FRAGMENT = /* glsl */ `
     // Sample the texture. Convert from frame space back to raw texture UV.
     vec2 sampleUV = clamp(texUV * vMaxUV, vec2(0.0), vMaxUV);
     vec4 texColor = texture(uTexture, sampleUV);
+
+    // Depth layers: vignette darkening + focus brightness
+    if (uVignetteStrength > 0.001 || uFocusBrightness > 0.001) {
+      // Vignette: darken edges based on distance from card center
+      vec2 vigUV = (texUV - 0.5) * 2.0; // -1 to 1
+      float vigDist = dot(vigUV, vigUV); // squared distance from center
+      float darken = 1.0 - uVignetteStrength * vigDist;
+
+      // Focus spotlight: brighten area near cursor
+      vec2 focusDelta = texUV - uFocusCenter;
+      float focusDist2 = dot(focusDelta, focusDelta);
+      float brighten = uFocusBrightness * exp(-8.0 * focusDist2);
+
+      texColor.rgb *= clamp(darken + brighten, 0.0, 1.5);
+    }
+
     finalColor = texColor * alpha;
   }
 `;
@@ -168,8 +187,8 @@ const FRAGMENT = /* glsl */ `
 /** Corner radius matching FocuSee's backgroundRound (0.04) */
 const DEFAULT_CORNER_RADIUS = 0.04;
 
-/** Default FOV in radians (30° — matching FocuSee's CreateAtPoint) */
-const DEFAULT_FOV = 0.5236; // 30° in radians
+/** Default FOV in radians (25° — narrower than 30° for stronger perspective) */
+const DEFAULT_FOV = 0.4363; // 25° in radians
 
 /** Extra padding so warped pixels aren't clipped at edges.
  *  Keep low — combined with resolution and clipToViewport settings
@@ -195,6 +214,9 @@ export class PerspectiveWarpFilter extends Filter {
           uCornerRadius: { value: DEFAULT_CORNER_RADIUS, type: "f32" },
           uContentInset: { value: 0, type: "f32" },
           uDebugMode: { value: 0, type: "f32" },
+          uVignetteStrength: { value: 0, type: "f32" },
+          uFocusBrightness: { value: 0, type: "f32" },
+          uFocusCenter: { value: new Float32Array([0.5, 0.5]), type: "vec2<f32>" },
         },
       },
       padding: FILTER_PADDING,
@@ -268,5 +290,32 @@ export class PerspectiveWarpFilter extends Filter {
   }
   get debugMode(): number {
     return this.resources.perspectiveUniforms.uniforms.uDebugMode as number;
+  }
+
+  /** Vignette strength (0–0.5): darkens edges for depth separation. */
+  set vignetteStrength(v: number) {
+    this.resources.perspectiveUniforms.uniforms.uVignetteStrength = v;
+  }
+  get vignetteStrength(): number {
+    return this.resources.perspectiveUniforms.uniforms.uVignetteStrength as number;
+  }
+
+  /** Focus brightness boost (0–0.2): brightens area near focus point. */
+  set focusBrightness(v: number) {
+    this.resources.perspectiveUniforms.uniforms.uFocusBrightness = v;
+  }
+  get focusBrightness(): number {
+    return this.resources.perspectiveUniforms.uniforms.uFocusBrightness as number;
+  }
+
+  /** Focus center in UV space [cx, cy] — where the spotlight is aimed. */
+  set focusCenter(v: [number, number]) {
+    const arr = this.resources.perspectiveUniforms.uniforms.uFocusCenter as Float32Array;
+    arr[0] = v[0];
+    arr[1] = v[1];
+  }
+  get focusCenter(): [number, number] {
+    const arr = this.resources.perspectiveUniforms.uniforms.uFocusCenter as Float32Array;
+    return [arr[0], arr[1]];
   }
 }
