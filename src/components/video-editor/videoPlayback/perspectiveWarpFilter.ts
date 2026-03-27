@@ -51,24 +51,15 @@ const FRAGMENT = /* glsl */ `
   uniform float uRotateY;       // yaw (radians): negative = right side tilts away
   uniform float uRotateZ;       // roll (radians): subtle card tilt
   uniform float uFov;           // field of view (radians)
-  uniform float uCornerRadius;  // viewport boundary corner radius (FocuSee backgroundRound)
-  uniform float uContentInset;  // viewport inset 0–0.15 (FocuSee backgroundPadding, ramped by zoom)
-  uniform vec2  uVideoExtent;   // fraction of filter texture occupied by video (0–1 each axis)
-
-  // Signed distance to a rounded rectangle centered at origin
-  float roundedBoxSDF(vec2 p, vec2 halfSize, float radius) {
-    vec2 d = abs(p) - halfSize + radius;
-    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
-  }
+  uniform float uCornerRadius;  // kept for uniform compat
+  uniform float uContentInset;  // kept for uniform compat
 
   void main(void) {
     vec2 screen = (vTextureCoord - 0.5) * 2.0;
     float ps = tan(uFov * 0.5);
 
-    // Ray from camera through this pixel
     vec3 rayDir = vec3(screen.x * ps, screen.y * ps, 1.0);
 
-    // Rotation matrix R = Rz * Ry * Rx
     float cX = cos(uRotateX), sX = sin(uRotateX);
     float cY = cos(uRotateY), sY = sin(uRotateY);
     float cZ = cos(uRotateZ), sZ = sin(uRotateZ);
@@ -103,26 +94,13 @@ const FRAGMENT = /* glsl */ `
 
     vec2 texUV = vec2(localX, localY) / (2.0 * ps) + 0.5;
 
-    // Out-of-range → transparent (quick reject)
     if (texUV.x < -0.05 || texUV.x > 1.05 || texUV.y < -0.05 || texUV.y > 1.05) {
       finalColor = vec4(0.0);
       return;
     }
 
     vec2 sampleUV = clamp(texUV, 0.0, 1.0);
-    vec4 color = texture(uTexture, sampleUV);
-
-    // Post-projection viewport boundary (FocuSee backgroundPadding + backgroundRound)
-    // Creates the "floating card" effect — transparent outside boundary → dark bg shows through
-    if (uContentInset > 0.0001 && uVideoExtent.x > 0.0 && uVideoExtent.y > 0.0) {
-      vec2 vpHalf = uVideoExtent * (1.0 - uContentInset);
-      float cornerSize = uCornerRadius * min(vpHalf.x, vpHalf.y);
-      float d = roundedBoxSDF(screen, vpHalf, cornerSize);
-      float vpAlpha = 1.0 - smoothstep(-0.005, 0.005, d);
-      color *= vpAlpha;
-    }
-
-    finalColor = color;
+    finalColor = texture(uTexture, sampleUV);
   }
 `;
 
@@ -153,7 +131,6 @@ export class PerspectiveWarpFilter extends Filter {
           uFov: { value: DEFAULT_FOV, type: "f32" },
           uCornerRadius: { value: DEFAULT_CORNER_RADIUS, type: "f32" },
           uContentInset: { value: 0, type: "f32" },
-          uVideoExtent: { value: new Float32Array([0, 0]), type: "vec2<f32>" },
         },
       },
       padding: FILTER_PADDING,
@@ -202,27 +179,11 @@ export class PerspectiveWarpFilter extends Filter {
     return this.resources.perspectiveUniforms.uniforms.uCornerRadius as number;
   }
 
-  /** Content inset (0–0.15): shrinks viewport boundary for floating card padding. */
+  /** Content inset (0–0.15): kept for uniform compat. */
   set contentInset(v: number) {
     this.resources.perspectiveUniforms.uniforms.uContentInset = v;
   }
   get contentInset(): number {
     return this.resources.perspectiveUniforms.uniforms.uContentInset as number;
-  }
-
-  /** Fraction of filter texture width occupied by video content (0–1). */
-  set videoExtentX(v: number) {
-    (this.resources.perspectiveUniforms.uniforms.uVideoExtent as Float32Array)[0] = v;
-  }
-  get videoExtentX(): number {
-    return (this.resources.perspectiveUniforms.uniforms.uVideoExtent as Float32Array)[0];
-  }
-
-  /** Fraction of filter texture height occupied by video content (0–1). */
-  set videoExtentY(v: number) {
-    (this.resources.perspectiveUniforms.uniforms.uVideoExtent as Float32Array)[1] = v;
-  }
-  get videoExtentY(): number {
-    return (this.resources.perspectiveUniforms.uniforms.uVideoExtent as Float32Array)[1];
   }
 }

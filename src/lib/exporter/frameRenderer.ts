@@ -29,7 +29,7 @@ import {
   createMotionBlurState,
   type MotionBlurState,
 } from "@/components/video-editor/videoPlayback/zoomTransform";
-import { PerspectiveWarpFilter, FILTER_PADDING } from "@/components/video-editor/videoPlayback/perspectiveWarpFilter";
+import { PerspectiveWarpFilter } from "@/components/video-editor/videoPlayback/perspectiveWarpFilter";
 import {
   compute3DTransform,
   is3DZoomActive,
@@ -867,14 +867,7 @@ export class FrameRenderer {
         this.perspectiveFilter.rotateY = springRotY * activeProgress;
         this.perspectiveFilter.rotateZ = springRotZ * activeProgress;
         this.perspectiveFilter.fov = fov;
-        // Viewport boundary: ramp contentInset by activeProgress (FocuSee backgroundPadding=0.05)
-        this.perspectiveFilter.contentInset = 0.05 * activeProgress;
-        // Tell shader where video is within filter texture
-        const bm = this.layoutCache.maskRect;
-        if (bm && bm.width > 0 && bm.height > 0) {
-          this.perspectiveFilter.videoExtentX = bm.width / (bm.width + 2 * FILTER_PADDING);
-          this.perspectiveFilter.videoExtentY = bm.height / (bm.height + 2 * FILTER_PADDING);
-        }
+        this.perspectiveFilter.contentInset = 0;
         filters.push(this.perspectiveFilter);
       }
       this.lastFrameTimeMs = timeMs;
@@ -1209,11 +1202,37 @@ export class FrameRenderer {
         `drop-shadow(${shadowX}px ${shadowY}px ${baseBlur1}px rgba(0,0,0,${baseAlpha1})) ` +
         `drop-shadow(${Math.round(shadowX * 0.4)}px ${Math.round(intensity * 4 - this.lastSpringRotX * 50)}px ${baseBlur2}px rgba(0,0,0,${baseAlpha2})) ` +
         `drop-shadow(0px ${Math.round(intensity * 2)}px ${baseBlur3}px rgba(0,0,0,${baseAlpha3}))`;
+
+      // Floating card clip (FocuSee backgroundPadding=0.05 + backgroundRound=0.04)
+      const zp = this.animationState.progress;
+      if (zp > 0.01) {
+        const insetX = Math.round(w * 0.025 * zp);
+        const insetY = Math.round(h * 0.025 * zp);
+        const radius = Math.round(Math.min(w, h) * 0.02 * zp);
+        shadowCtx.beginPath();
+        shadowCtx.roundRect(insetX, insetY, w - 2 * insetX, h - 2 * insetY, radius);
+        shadowCtx.clip();
+      }
+
       shadowCtx.drawImage(videoCanvas, 0, 0, w, h);
       shadowCtx.restore();
       ctx.drawImage(this.shadowCanvas, 0, 0, w, h);
     } else {
-      ctx.drawImage(videoCanvas, 0, 0, w, h);
+      // No shadow — still apply floating card clip if zoomed
+      const zp = this.animationState.progress;
+      if (zp > 0.01) {
+        ctx.save();
+        const insetX = Math.round(w * 0.025 * zp);
+        const insetY = Math.round(h * 0.025 * zp);
+        const radius = Math.round(Math.min(w, h) * 0.02 * zp);
+        ctx.beginPath();
+        ctx.roundRect(insetX, insetY, w - 2 * insetX, h - 2 * insetY, radius);
+        ctx.clip();
+        ctx.drawImage(videoCanvas, 0, 0, w, h);
+        ctx.restore();
+      } else {
+        ctx.drawImage(videoCanvas, 0, 0, w, h);
+      }
     }
 
     this.drawWebcamOverlay(ctx, w, h);

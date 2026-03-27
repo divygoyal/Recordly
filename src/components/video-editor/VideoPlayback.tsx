@@ -77,7 +77,7 @@ import {
   createMotionBlurState,
   type MotionBlurState,
 } from "./videoPlayback/zoomTransform";
-import { PerspectiveWarpFilter, FILTER_PADDING } from "./videoPlayback/perspectiveWarpFilter";
+import { PerspectiveWarpFilter } from "./videoPlayback/perspectiveWarpFilter";
 import {
   compute3DTransform,
   is3DZoomActive,
@@ -1406,14 +1406,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             perspFilter.rotateY = springRotY * zoomProgress;
             perspFilter.rotateZ = springRotZ * zoomProgress;
             perspFilter.fov = fov;
-            // Viewport boundary: ramp contentInset by zoomProgress (FocuSee backgroundPadding=0.05)
-            perspFilter.contentInset = 0.05 * zoomProgress;
-            // Tell shader where video is within filter texture
-            const bm = baseMaskRef.current;
-            if (bm && bm.width > 0 && bm.height > 0) {
-              perspFilter.videoExtentX = bm.width / (bm.width + 2 * FILTER_PADDING);
-              perspFilter.videoExtentY = bm.height / (bm.height + 2 * FILTER_PADDING);
-            }
+            perspFilter.contentInset = 0;
             videoFilters.push(perspFilter);
             perspFilterActiveRef.current = true;
 
@@ -1472,6 +1465,21 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             } else if (!filtersActive && vc.mask !== mg) {
               mg.visible = true;
               vc.mask = mg;
+            }
+          }
+
+          // Floating card boundary via CSS clip-path (screen-space, post-zoom).
+          // FocuSee's backgroundPadding=0.05 + backgroundRound=0.04 creates a
+          // visible dark border around the 3D card. We apply this in screen space
+          // so it's independent of the camera zoom transform.
+          const canvasEl = appRef.current?.canvas as HTMLCanvasElement | undefined;
+          if (canvasEl) {
+            if (zoomProgress > 0.01) {
+              const insetPct = 2.5 * zoomProgress; // 5% total (2.5% each side)
+              const radius = Math.round(20 * zoomProgress);
+              canvasEl.style.clipPath = `inset(${insetPct.toFixed(2)}% round ${radius}px)`;
+            } else {
+              canvasEl.style.clipPath = "none";
             }
           }
         }
