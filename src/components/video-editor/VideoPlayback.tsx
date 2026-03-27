@@ -1453,27 +1453,21 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
           // Mask must be DISABLED during zoom: PixiJS v8 applies mask BEFORE
           // filter, so the squircle clips 2D content before the 3D projection.
-          // When the card tilts, the near side extends beyond the mask boundary,
-          // causing visible content loss. Re-enable mask when not zoomed for
-          // 2D rounded corners.
+          // The user wants NO rounding on the video content itself —
+          // outer card rounding is handled by CSS border-radius on the canvas.
           const mg = maskGraphicsRef.current;
-          const filtersActive = videoFilters.length > 0;
           if (mg) {
-            if (filtersActive && vc.mask === mg) {
+            if (vc.mask === mg) {
               vc.mask = null;
               mg.visible = false;
-            } else if (!filtersActive && vc.mask !== mg) {
-              mg.visible = true;
-              vc.mask = mg;
             }
           }
 
-          // Floating card boundary via CSS clip-path (screen-space, post-zoom).
-          // FocuSee's backgroundPadding=0.05 + backgroundRound=0.04 creates a
-          // visible dark border around the 3D card. We apply this in screen space
-          // so it's independent of the camera zoom transform.
+          // Outer card rounding via CSS border-radius (always active).
+          // Floating card boundary via CSS clip-path (only during zoom).
           const canvasEl = appRef.current?.canvas as HTMLCanvasElement | undefined;
           if (canvasEl) {
+            canvasEl.style.borderRadius = "12px";
             if (zoomProgress > 0.01) {
               const insetPct = 2.5 * zoomProgress; // 5% total (2.5% each side)
               const radius = Math.round(20 * zoomProgress);

@@ -1933,7 +1933,7 @@ export default function VideoEditor() {
 			return;
 		}
 
-		const DEFAULT_DURATION_MS = 1100;
+		const DEFAULT_DURATION_MS = 850;
 		const MIN_SPACING_MS = 1800;
 		const sortedCandidates = [...candidates].sort((a, b) => b.strength - a.strength);
 		const acceptedCenters: number[] = [];
@@ -2821,6 +2821,9 @@ export default function VideoEditor() {
 				exporterRef.current = null;
 				setShowExportDropdown(keepExportDialogOpen);
 				setExportProgress(null);
+				// Delay preview remount to avoid WebGL context conflict:
+				// old PixiJS app must fully destroy before new one initializes
+				await new Promise((r) => setTimeout(r, 100));
 				setPreviewVersion((version) => version + 1);
 			}
 		},

@@ -8,7 +8,7 @@ import { clamp01, cubicBezier, easeOutCubic } from "./mathUtils";
 
 const CHAINED_ZOOM_PAN_GAP_MS = 1500;
 const CONNECTED_ZOOM_PAN_DURATION_MS = 1000;
-const ZOOM_IN_OVERLAP_MS = 200;
+const ZOOM_IN_OVERLAP_MS = 150;
 
 type DominantRegionOptions = {
   connectZooms?: boolean;

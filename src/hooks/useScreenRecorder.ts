@@ -516,13 +516,18 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
     setStarting(true);
 
     try {
-      const selectedSource = await window.electronAPI.getSelectedSource();
+      // Parallelize independent IPC calls to reduce startup latency
+      const [selectedSource, permissionsReady, platform] = await Promise.all([
+        window.electronAPI.getSelectedSource(),
+        preparePermissions(),
+        window.electronAPI.getPlatform(),
+      ]);
+
       if (!selectedSource) {
         alert("Please select a source to record");
         return;
       }
 
-      const permissionsReady = await preparePermissions();
       if (!permissionsReady) {
         return;
       }
@@ -531,7 +536,6 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
       resetRecordingClock(recordingSessionTimestamp.current);
       await startWebcamRecorder();
 
-      const platform = await window.electronAPI.getPlatform();
       const useNativeMacScreenCapture =
         platform === "darwin" &&
         (selectedSource.id?.startsWith("screen:") || selectedSource.id?.startsWith("window:")) &&

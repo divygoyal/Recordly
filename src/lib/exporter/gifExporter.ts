@@ -253,10 +253,33 @@ export class GifExporter {
         });
       }
 
-      // Render the GIF
-      const blob = await new Promise<Blob>((resolve, _reject) => {
+      // Render the GIF with timeout protection — gif.js worker can hang indefinitely
+      const GIF_RENDER_TIMEOUT_MS = 300_000; // 5 minutes
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        let settled = false;
+
+        const timeout = setTimeout(() => {
+          if (!settled) {
+            settled = true;
+            reject(new Error("GIF rendering timed out after 5 minutes"));
+          }
+        }, GIF_RENDER_TIMEOUT_MS);
+
         this.gif!.on("finished", (blob: Blob) => {
-          resolve(blob);
+          if (!settled) {
+            settled = true;
+            clearTimeout(timeout);
+            resolve(blob);
+          }
+        });
+
+        // Handle gif.js worker errors (event not in typed overloads)
+        (this.gif! as unknown as { on(event: string, listener: (...args: unknown[]) => void): void }).on("error", (error: unknown) => {
+          if (!settled) {
+            settled = true;
+            clearTimeout(timeout);
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
         });
 
         // Track rendering progress
@@ -273,7 +296,6 @@ export class GifExporter {
           }
         });
 
-        // gif.js doesn't have a typed 'error' event, but we can catch errors in the try/catch
         this.gif!.render();
       });
 

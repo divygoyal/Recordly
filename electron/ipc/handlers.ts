@@ -4456,11 +4456,14 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
     const countdownWin = createCountdownWindow()
 
     if (countdownWin.webContents.isLoadingMainFrame()) {
-      await new Promise<void>((resolve) => {
-        countdownWin.webContents.once('did-finish-load', () => {
-          resolve()
-        })
-      })
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          countdownWin.webContents.once('did-finish-load', () => {
+            resolve()
+          })
+        }),
+        new Promise<void>((resolve) => setTimeout(resolve, 5000)), // 5s timeout
+      ])
     }
 
     return new Promise<{ success: boolean; cancelled?: boolean }>((resolve) => {

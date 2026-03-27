@@ -75,6 +75,7 @@ export class VideoExporter {
 	private videoDescription: Uint8Array | undefined;
 	private videoColorSpace: VideoColorSpaceInit | undefined;
 	private pendingMuxing: Promise<void> = Promise.resolve();
+	private muxingError: Error | null = null;
 	private chunkCount = 0;
 	private readonly WINDOWS_FINALIZATION_TIMEOUT_MS = 180_000;
 
@@ -193,6 +194,10 @@ export class VideoExporter {
 
 			// Wait for queued muxing operations to complete
 			await this.awaitWithWindowsTimeout(this.pendingMuxing, "muxing queued video chunks");
+
+			if (this.muxingError) {
+				throw this.muxingError;
+			}
 
 			if (hasAudio && !this.cancelled) {
 				const demuxer = this.streamingDecoder.getDemuxer();
@@ -362,6 +367,7 @@ export class VideoExporter {
 						}
 					} catch (error) {
 						console.error("Muxing error:", error);
+						this.muxingError = error instanceof Error ? error : new Error(String(error));
 					}
 				});
 				this.encodeQueue--;
@@ -478,6 +484,7 @@ export class VideoExporter {
 		this.audioProcessor = null;
 		this.encodeQueue = 0;
 		this.pendingMuxing = Promise.resolve();
+		this.muxingError = null;
 		this.chunkCount = 0;
 		this.videoDescription = undefined;
 		this.videoColorSpace = undefined;
