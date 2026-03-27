@@ -19,6 +19,8 @@ import { Filter, GlProgram } from "pixi.js";
 const VERTEX = /* glsl */ `
   in vec2 aPosition;
   out vec2 vTextureCoord;
+  out vec2 vMaxUV;
+  out vec2 vPadFrac;
 
   uniform vec4 uInputSize;
   uniform vec4 uOutputFrame;
@@ -38,12 +40,24 @@ const VERTEX = /* glsl */ `
   void main(void) {
     gl_Position = filterVertexPosition();
     vTextureCoord = filterTextureCoord();
+
+    // PixiJS allocates power-of-2 textures (source.width >= frame.width).
+    // vTextureCoord ranges from 0 to maxUV, NOT 0 to 1.
+    // Pass frame-relative values so the fragment shader can work in
+    // normalized "frame space" (0-1 within the actual content frame).
+    vMaxUV = uOutputFrame.zw * uInputSize.zw;
+
+    // Padding fraction within the frame (FILTER_PADDING / frame dimensions).
+    // 300.0 must match the TypeScript FILTER_PADDING constant.
+    vPadFrac = vec2(300.0) / uOutputFrame.zw;
   }
 `;
 
 const FRAGMENT = /* glsl */ `
   precision highp float;
   in vec2 vTextureCoord;
+  in vec2 vMaxUV;
+  in vec2 vPadFrac;
   out vec4 finalColor;
 
   uniform sampler2D uTexture;
@@ -53,12 +67,6 @@ const FRAGMENT = /* glsl */ `
   uniform float uFov;           // field of view (radians)
   uniform float uCornerRadius;  // corner rounding in UV space (FocuSee: 0.04)
   uniform float uContentInset;  // inset for floating card padding (FocuSee: 0.05)
-  uniform float uFilterPadding; // FILTER_PADDING in logical pixels (300)
-
-  // PixiJS built-in: (width, height, 1/width, 1/height) of the filter texture.
-  // Declared in vertex shader too; WebGL shares the uniform location.
-  // Used by PixiJS's own displacement filter in its fragment shader.
-  uniform vec4 uInputSize;
 
   // Signed distance to a rounded rectangle centered at origin.
   // b = half-size, r = corner radius. Returns negative inside, positive outside.
@@ -68,7 +76,15 @@ const FRAGMENT = /* glsl */ `
   }
 
   void main(void) {
-    vec2 screen = (vTextureCoord - 0.5) * 2.0;
+    // Normalize to "frame space" (0-1 within the actual content frame).
+    // PixiJS allocates power-of-2 textures, so vTextureCoord maxes at
+    // vMaxUV (e.g., 0.88), NOT 1.0. Without this normalization the 3D
+    // projection would be off-center and the SDF bounds would overshoot
+    // the valid texture region.
+    vec2 frameCoord = vTextureCoord / vMaxUV;
+
+    // Screen coordinates: -1 to +1, centered on the frame.
+    vec2 screen = (frameCoord - 0.5) * 2.0;
     float ps = tan(uFov * 0.5);
 
     vec3 rayDir = vec3(screen.x * ps, screen.y * ps, 1.0);
@@ -105,14 +121,14 @@ const FRAGMENT = /* glsl */ `
                  + (sY * sX * sZ + cX * cZ) * offset.y
                  + cY * sX * offset.z;
 
+    // texUV is in "frame space" (0-1 within the frame), matching frameCoord.
     vec2 texUV = vec2(localX, localY) / (2.0 * ps) + 0.5;
 
-    // Compute content bounds from the actual filter texture dimensions.
-    // uInputSize.xy = logical size of the padded filter texture.
-    // FILTER_PADDING adds uFilterPadding logical pixels on each side.
-    // This auto-adapts to zoom scale, resolution, and container bounds.
-    vec2 contentMin = vec2(uFilterPadding * uInputSize.z, uFilterPadding * uInputSize.w);
-    vec2 contentMax = 1.0 - contentMin;
+    // Content bounds within the frame. FILTER_PADDING adds extra pixels
+    // around the container's visible bounds. Content occupies from
+    // vPadFrac to (1 - vPadFrac) within the frame.
+    vec2 contentMin = vPadFrac;
+    vec2 contentMax = 1.0 - vPadFrac;
     vec2 contentSize = contentMax - contentMin;
     vec2 contentUV = (texUV - contentMin) / contentSize;
 
@@ -140,8 +156,8 @@ const FRAGMENT = /* glsl */ `
       return;
     }
 
-    // Sample the texture using the original (padded) texUV, not contentUV
-    vec2 sampleUV = clamp(texUV, 0.0, 1.0);
+    // Sample the texture. Convert from frame space back to raw texture UV.
+    vec2 sampleUV = clamp(texUV * vMaxUV, vec2(0.0), vMaxUV);
     vec4 texColor = texture(uTexture, sampleUV);
     finalColor = texColor * alpha;
   }
@@ -174,7 +190,6 @@ export class PerspectiveWarpFilter extends Filter {
           uFov: { value: DEFAULT_FOV, type: "f32" },
           uCornerRadius: { value: DEFAULT_CORNER_RADIUS, type: "f32" },
           uContentInset: { value: 0, type: "f32" },
-          uFilterPadding: { value: FILTER_PADDING, type: "f32" },
         },
       },
       padding: FILTER_PADDING,

@@ -1410,9 +1410,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             perspFilter.cornerRadius = 0.04;
             perspFilter.contentInset = 0.05 * zoomProgress;
 
-            // Content bounds are now computed inside the GLSL shader using
-            // the PixiJS built-in uInputSize uniform + uFilterPadding.
-            // This auto-adapts to zoom scale, resolution, and container bounds.
+            // Content bounds are computed inside the GLSL vertex shader using
+            // uOutputFrame + uInputSize built-ins, passed to the fragment shader
+            // as varyings. This auto-adapts to zoom scale, resolution, PO2
+            // texture sizing, and container bounds.
 
             // Only activate the filter when there's actual zoom — when not
             // zooming the 2D squircle mask provides rounded corners and the

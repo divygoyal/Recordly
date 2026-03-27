@@ -873,8 +873,8 @@ export class FrameRenderer {
         this.perspectiveFilter.cornerRadius = 0.04;
         this.perspectiveFilter.contentInset = 0.05 * activeProgress;
 
-        // Content bounds are computed inside the GLSL shader using
-        // the PixiJS built-in uInputSize + uFilterPadding uniforms.
+        // Content bounds are computed inside the GLSL vertex shader using
+        // uOutputFrame + uInputSize built-ins, passed as varyings.
 
         // Only activate filter during actual zoom — when not zooming, the
         // 2D squircle mask provides corners and the filter's FILTER_PADDING
