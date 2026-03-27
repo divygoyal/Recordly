@@ -1453,8 +1453,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
           // Mask must be DISABLED during zoom: PixiJS v8 applies mask BEFORE
           // filter, so the squircle clips 2D content before the 3D projection.
-          // The user wants NO rounding on the video content itself —
-          // outer card rounding is handled by CSS border-radius on the canvas.
+          // Rounding is handled by the CSS clip-path on the floating card.
           const mg = maskGraphicsRef.current;
           if (mg) {
             if (vc.mask === mg) {
@@ -1463,11 +1462,12 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             }
           }
 
-          // Outer card rounding via CSS border-radius (always active).
-          // Floating card boundary via CSS clip-path (only during zoom).
+          // Canvas background: NO border-radius (sharp edges).
+          // Floating card: CSS clip-path with inset + round during zoom
+          // creates the rounded 3D card look without clipping at canvas edges.
           const canvasEl = appRef.current?.canvas as HTMLCanvasElement | undefined;
           if (canvasEl) {
-            canvasEl.style.borderRadius = "12px";
+            canvasEl.style.borderRadius = "0";
             if (zoomProgress > 0.01) {
               const insetPct = 2.5 * zoomProgress; // 5% total (2.5% each side)
               const radius = Math.round(20 * zoomProgress);

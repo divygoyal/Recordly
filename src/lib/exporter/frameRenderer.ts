@@ -1203,20 +1203,15 @@ export class FrameRenderer {
         `drop-shadow(${Math.round(shadowX * 0.4)}px ${Math.round(intensity * 4 - this.lastSpringRotX * 50)}px ${baseBlur2}px rgba(0,0,0,${baseAlpha2})) ` +
         `drop-shadow(0px ${Math.round(intensity * 2)}px ${baseBlur3}px rgba(0,0,0,${baseAlpha3}))`;
 
-      // Floating card clip (FocuSee backgroundPadding=0.05 + backgroundRound=0.04)
+      // Floating card clip: rounded corners on the 3D card during zoom only.
+      // Background canvas has sharp edges — no rounding when not zoomed.
       const zp = this.animationState.progress;
-      // Always apply outer card rounding
-      const baseRadius = Math.round(Math.min(w, h) * 0.01);
       if (zp > 0.01) {
         const insetX = Math.round(w * 0.025 * zp);
         const insetY = Math.round(h * 0.025 * zp);
-        const radius = Math.max(baseRadius, Math.round(Math.min(w, h) * 0.02 * zp));
+        const radius = Math.round(Math.min(w, h) * 0.02 * zp);
         shadowCtx.beginPath();
         shadowCtx.roundRect(insetX, insetY, w - 2 * insetX, h - 2 * insetY, radius);
-        shadowCtx.clip();
-      } else {
-        shadowCtx.beginPath();
-        shadowCtx.roundRect(0, 0, w, h, baseRadius);
         shadowCtx.clip();
       }
 
@@ -1224,26 +1219,20 @@ export class FrameRenderer {
       shadowCtx.restore();
       ctx.drawImage(this.shadowCanvas, 0, 0, w, h);
     } else {
-      // No shadow — still apply card rounding
+      // No shadow — apply floating card clip only during zoom
       const zp = this.animationState.progress;
-      const baseRadius = Math.round(Math.min(w, h) * 0.01);
       if (zp > 0.01) {
         ctx.save();
         const insetX = Math.round(w * 0.025 * zp);
         const insetY = Math.round(h * 0.025 * zp);
-        const radius = Math.max(baseRadius, Math.round(Math.min(w, h) * 0.02 * zp));
+        const radius = Math.round(Math.min(w, h) * 0.02 * zp);
         ctx.beginPath();
         ctx.roundRect(insetX, insetY, w - 2 * insetX, h - 2 * insetY, radius);
         ctx.clip();
         ctx.drawImage(videoCanvas, 0, 0, w, h);
         ctx.restore();
       } else {
-        ctx.save();
-        ctx.beginPath();
-        ctx.roundRect(0, 0, w, h, baseRadius);
-        ctx.clip();
         ctx.drawImage(videoCanvas, 0, 0, w, h);
-        ctx.restore();
       }
     }
 
