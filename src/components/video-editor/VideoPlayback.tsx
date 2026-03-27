@@ -1454,22 +1454,20 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             vc.filters = newCount > 0 ? videoFilters : null;
           }
 
-          // Mask must be DISABLED during zoom: PixiJS v8 applies mask BEFORE
-          // filter, so the squircle clips 2D content before the 3D projection.
-          // Rounding is now handled by the shader SDF — no CSS clip needed.
+          // Mask toggle: DISABLE during zoom (PixiJS v8 applies mask BEFORE
+          // filter → clips 2D content before 3D projection). RE-ENABLE when
+          // not zoomed so the video renders within proper bounds.
+          // During zoom, the shader SDF provides rounded corners + inset.
           const mg = maskGraphicsRef.current;
+          const filtersActive = videoFilters.length > 0;
           if (mg) {
-            if (vc.mask === mg) {
+            if (filtersActive && vc.mask === mg) {
               vc.mask = null;
               mg.visible = false;
+            } else if (!filtersActive && vc.mask !== mg) {
+              mg.visible = true;
+              vc.mask = mg;
             }
-          }
-
-          // Ensure no CSS clipping interferes with the shader-based rounding
-          const canvasEl = appRef.current?.canvas as HTMLCanvasElement | undefined;
-          if (canvasEl) {
-            canvasEl.style.borderRadius = "0";
-            canvasEl.style.clipPath = "none";
           }
         }
       };
