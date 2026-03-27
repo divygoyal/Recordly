@@ -53,6 +53,7 @@ const FRAGMENT = /* glsl */ `
   out vec4 finalColor;
 
   uniform sampler2D uTexture;
+  uniform vec4 uOutputFrame;     // PixiJS global: xy=offset, zw=frame size (px)
   uniform float uRotateX;       // pitch (radians): negative = top tilts away
   uniform float uRotateY;       // yaw (radians): negative = right side tilts away
   uniform float uRotateZ;       // roll (radians): subtle card tilt
@@ -147,8 +148,9 @@ const FRAGMENT = /* glsl */ `
     vec2 cardCenter = texUV - 0.5;
     float dist = roundedBoxSDF(cardCenter, vec2(halfW, halfH), cr);
 
-    // Anti-aliased edge: smooth transition over ~1px in UV space
-    float feather = fwidth(dist) * 1.2;
+    // Anti-aliased edge: approximate 1-pixel feather in UV space
+    // (fwidth not reliably available in PixiJS v8 shader pipeline)
+    float feather = 1.5 / max(uOutputFrame.z, uOutputFrame.w);
     float alpha = 1.0 - smoothstep(-feather, feather, dist);
 
     if (alpha < 0.001) {
