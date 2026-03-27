@@ -29,7 +29,7 @@ import {
   createMotionBlurState,
   type MotionBlurState,
 } from "@/components/video-editor/videoPlayback/zoomTransform";
-import { PerspectiveWarpFilter, FILTER_PADDING } from "@/components/video-editor/videoPlayback/perspectiveWarpFilter";
+import { PerspectiveWarpFilter } from "@/components/video-editor/videoPlayback/perspectiveWarpFilter";
 import {
   compute3DTransform,
   is3DZoomActive,
@@ -873,19 +873,8 @@ export class FrameRenderer {
         this.perspectiveFilter.cornerRadius = 0.04;
         this.perspectiveFilter.contentInset = 0.05 * activeProgress;
 
-        // Tell the shader where the video content sits within the
-        // padded filter texture so the SDF operates on video bounds.
-        const fullDisp = this.layoutCache?.fullVideoDisplaySize;
-        if (fullDisp && fullDisp.width > 0 && fullDisp.height > 0) {
-          const padW = fullDisp.width + 2 * FILTER_PADDING;
-          const padH = fullDisp.height + 2 * FILTER_PADDING;
-          this.perspectiveFilter.setContentBounds(
-            FILTER_PADDING / padW,
-            FILTER_PADDING / padH,
-            (FILTER_PADDING + fullDisp.width) / padW,
-            (FILTER_PADDING + fullDisp.height) / padH,
-          );
-        }
+        // Content bounds are computed inside the GLSL shader using
+        // the PixiJS built-in uInputSize + uFilterPadding uniforms.
 
         // Only activate filter during actual zoom — when not zooming, the
         // 2D squircle mask provides corners and the filter's FILTER_PADDING
@@ -1030,7 +1019,6 @@ export class FrameRenderer {
     this.layoutCache = {
       stageSize: { width, height },
       videoSize: { width: croppedVideoWidth, height: croppedVideoHeight },
-      fullVideoDisplaySize: { width: fullVideoDisplayWidth, height: fullVideoDisplayHeight },
       baseScale: scale,
       baseOffset: { x: spriteX, y: spriteY },
       maskRect: {

@@ -53,13 +53,12 @@ const FRAGMENT = /* glsl */ `
   uniform float uFov;           // field of view (radians)
   uniform float uCornerRadius;  // corner rounding in UV space (FocuSee: 0.04)
   uniform float uContentInset;  // inset for floating card padding (FocuSee: 0.05)
-  // Content bounds within the padded filter texture.
-  // FILTER_PADDING adds extra pixels around the container — these uniforms
-  // tell the SDF where the actual video content sits (0-1 = full texture).
-  uniform float uContentMinX;
-  uniform float uContentMinY;
-  uniform float uContentMaxX;
-  uniform float uContentMaxY;
+  uniform float uFilterPadding; // FILTER_PADDING in logical pixels (300)
+
+  // PixiJS built-in: (width, height, 1/width, 1/height) of the filter texture.
+  // Declared in vertex shader too; WebGL shares the uniform location.
+  // Used by PixiJS's own displacement filter in its fragment shader.
+  uniform vec4 uInputSize;
 
   // Signed distance to a rounded rectangle centered at origin.
   // b = half-size, r = corner radius. Returns negative inside, positive outside.
@@ -108,11 +107,12 @@ const FRAGMENT = /* glsl */ `
 
     vec2 texUV = vec2(localX, localY) / (2.0 * ps) + 0.5;
 
-    // Remap texUV from padded-texture space to content-local space.
-    // texUV 0-1 spans the entire padded filter texture; contentUV 0-1
-    // spans only the actual video content within that texture.
-    vec2 contentMin = vec2(uContentMinX, uContentMinY);
-    vec2 contentMax = vec2(uContentMaxX, uContentMaxY);
+    // Compute content bounds from the actual filter texture dimensions.
+    // uInputSize.xy = logical size of the padded filter texture.
+    // FILTER_PADDING adds uFilterPadding logical pixels on each side.
+    // This auto-adapts to zoom scale, resolution, and container bounds.
+    vec2 contentMin = vec2(uFilterPadding * uInputSize.z, uFilterPadding * uInputSize.w);
+    vec2 contentMax = 1.0 - contentMin;
     vec2 contentSize = contentMax - contentMin;
     vec2 contentUV = (texUV - contentMin) / contentSize;
 
@@ -174,10 +174,7 @@ export class PerspectiveWarpFilter extends Filter {
           uFov: { value: DEFAULT_FOV, type: "f32" },
           uCornerRadius: { value: DEFAULT_CORNER_RADIUS, type: "f32" },
           uContentInset: { value: 0, type: "f32" },
-          uContentMinX: { value: 0, type: "f32" },
-          uContentMinY: { value: 0, type: "f32" },
-          uContentMaxX: { value: 1, type: "f32" },
-          uContentMaxY: { value: 1, type: "f32" },
+          uFilterPadding: { value: FILTER_PADDING, type: "f32" },
         },
       },
       padding: FILTER_PADDING,
@@ -232,14 +229,5 @@ export class PerspectiveWarpFilter extends Filter {
   }
   get contentInset(): number {
     return this.resources.perspectiveUniforms.uniforms.uContentInset as number;
-  }
-
-  /** Set content bounds within the padded filter texture (accounts for FILTER_PADDING). */
-  setContentBounds(minX: number, minY: number, maxX: number, maxY: number) {
-    const u = this.resources.perspectiveUniforms.uniforms;
-    u.uContentMinX = minX;
-    u.uContentMinY = minY;
-    u.uContentMaxX = maxX;
-    u.uContentMaxY = maxY;
   }
 }
