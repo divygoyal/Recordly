@@ -1498,7 +1498,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             perspFilter.rotateZ = springRotZ * zoomProgress;
             perspFilter.fov = fov;
             perspFilter.cornerRadius = 0.04;
-            perspFilter.contentInset = 0.05 * zoomProgress;
+            // FocuSee's card always shows full content — no inset cropping.
+            // backgroundPadding (0.05) is a LAYOUT gap between card and
+            // background frame, not a content-shrinking parameter.
+            perspFilter.contentInset = 0;
             // Depth layers: vignette darkens edges, spotlight brightens focus
             perspFilter.vignetteStrength = 0.3 * zoomProgress;
             perspFilter.focusBrightness = 0.12 * zoomProgress;

@@ -869,7 +869,8 @@ export class FrameRenderer {
         this.perspectiveFilter.rotateZ = springRotZ * activeProgress;
         this.perspectiveFilter.fov = fov;
         this.perspectiveFilter.cornerRadius = 0.04;
-        this.perspectiveFilter.contentInset = 0.05 * activeProgress;
+        // FocuSee's card always shows full content — no inset cropping.
+        this.perspectiveFilter.contentInset = 0;
         // Depth layers: vignette darkens edges, spotlight brightens focus
         this.perspectiveFilter.vignetteStrength = 0.3 * activeProgress;
         this.perspectiveFilter.focusBrightness = 0.12 * activeProgress;
