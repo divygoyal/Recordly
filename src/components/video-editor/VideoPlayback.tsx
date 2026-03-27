@@ -1506,10 +1506,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
             perspFilter.debugMode = 0;
 
-            // Only activate the filter when there's actual zoom — when not
-            // zooming the 2D squircle mask provides rounded corners and the
-            // filter's FILTER_PADDING would break the identity coordinate
-            // mapping (texUV spans padded texture, not video content).
+            // Activate filter when zooming — the content-aware SDF correctly
+            // handles FILTER_PADDING so corners align with video edges at
+            // any zoom level.  When not zooming the 2D squircle mask is
+            // cheaper (no padding allocation / extra GPU texture).
             if (zoomProgress > 0) {
               spriteFilters.push(perspFilter);
 

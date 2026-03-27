@@ -58,12 +58,13 @@ const FRAGMENT = /* glsl */ `
   uniform float uRotateY;       // yaw (radians): negative = right side tilts away
   uniform float uRotateZ;       // roll (radians): subtle card tilt
   uniform float uFov;           // field of view (radians)
-  uniform float uCornerRadius;  // corner rounding in UV space (FocuSee: 0.04)
+  uniform float uCornerRadius;  // corner rounding in content-UV space (FocuSee: 0.04)
   uniform float uContentInset;  // inset for floating card padding (FocuSee: 0.05)
+  uniform float uFilterPadding; // FILTER_PADDING in pixels (150) — needed to map SDF to video content
   uniform float uDebugMode;     // 0=normal, 1=passthrough (diagnostic)
   uniform float uVignetteStrength; // 0–0.5: darkens card edges during zoom
   uniform float uFocusBrightness; // 0–0.2: brightens area near focus point
-  uniform vec2  uFocusCenter;     // focus position in UV space (cx, cy)
+  uniform vec2  uFocusCenter;     // focus position in content-UV space (cx, cy)
 
   // Signed distance to a rounded rectangle centered at origin.
   // b = half-size, r = corner radius. Returns negative inside, positive outside.
@@ -140,20 +141,29 @@ const FRAGMENT = /* glsl */ `
     // texUV is in "frame space" (0-1 within the frame), matching frameCoord.
     vec2 texUV = vec2(localX, localY) / (2.0 * ps) + 0.5;
 
-    // SDF operates directly on frame-space texUV. During zoom the camera
-    // scales the video to fill most of the filter texture, so there is no
-    // separate "content area" to remap into — the card shape simply covers
-    // the frame minus the inset margin.
+    // ── Content-aware SDF ──────────────────────────────────────
+    // FILTER_PADDING adds extra pixels around the video content in the
+    // filter texture. texUV (= frameCoord at identity) spans the FULL
+    // padded texture 0-1. The actual video content only occupies the
+    // centre portion. Remap to "content UV" so SDF corners align with
+    // the real video edges (not the padding boundary).
+    float padFracX = uFilterPadding / uOutputFrame.z;
+    float padFracY = uFilterPadding / uOutputFrame.w;
+    vec2 contentOrigin = vec2(padFracX, padFracY);
+    vec2 contentScale  = vec2(1.0 - 2.0 * padFracX, 1.0 - 2.0 * padFracY);
+    vec2 contentUV = (texUV - contentOrigin) / contentScale;
+
     float inset = uContentInset;
     float halfW = 0.5 - inset;
     float halfH = 0.5 - inset;
     float cr = uCornerRadius;
-    vec2 cardCenter = texUV - 0.5;
+    vec2 cardCenter = contentUV - 0.5;
     float dist = roundedBoxSDF(cardCenter, vec2(halfW, halfH), cr);
 
-    // Anti-aliased edge: approximate 1-pixel feather in UV space
-    // (fwidth not reliably available in PixiJS v8 shader pipeline)
-    float feather = 1.5 / max(uOutputFrame.z, uOutputFrame.w);
+    // Anti-aliased edge in content-UV space
+    float contentPxW = uOutputFrame.z - 2.0 * uFilterPadding;
+    float contentPxH = uOutputFrame.w - 2.0 * uFilterPadding;
+    float feather = 1.5 / max(contentPxW, contentPxH);
     float alpha = 1.0 - smoothstep(-feather, feather, dist);
 
     if (alpha < 0.001) {
@@ -165,15 +175,13 @@ const FRAGMENT = /* glsl */ `
     vec2 sampleUV = clamp(texUV * vMaxUV, vec2(0.0), vMaxUV);
     vec4 texColor = texture(uTexture, sampleUV);
 
-    // Depth layers: vignette darkening + focus brightness
+    // Depth layers: vignette darkening + focus brightness (in content UV)
     if (uVignetteStrength > 0.001 || uFocusBrightness > 0.001) {
-      // Vignette: darken edges based on distance from card center
-      vec2 vigUV = (texUV - 0.5) * 2.0; // -1 to 1
-      float vigDist = dot(vigUV, vigUV); // squared distance from center
+      vec2 vigUV = (contentUV - 0.5) * 2.0; // -1 to 1 across content
+      float vigDist = dot(vigUV, vigUV);
       float darken = 1.0 - uVignetteStrength * vigDist;
 
-      // Focus spotlight: brighten area near cursor
-      vec2 focusDelta = texUV - uFocusCenter;
+      vec2 focusDelta = contentUV - uFocusCenter;
       float focusDist2 = dot(focusDelta, focusDelta);
       float brighten = uFocusBrightness * exp(-8.0 * focusDist2);
 
@@ -213,6 +221,7 @@ export class PerspectiveWarpFilter extends Filter {
           uFov: { value: DEFAULT_FOV, type: "f32" },
           uCornerRadius: { value: DEFAULT_CORNER_RADIUS, type: "f32" },
           uContentInset: { value: 0, type: "f32" },
+          uFilterPadding: { value: FILTER_PADDING, type: "f32" },
           uDebugMode: { value: 0, type: "f32" },
           uVignetteStrength: { value: 0, type: "f32" },
           uFocusBrightness: { value: 0, type: "f32" },
@@ -282,6 +291,14 @@ export class PerspectiveWarpFilter extends Filter {
   }
   get contentInset(): number {
     return this.resources.perspectiveUniforms.uniforms.uContentInset as number;
+  }
+
+  /** Filter padding in pixels — matches FILTER_PADDING. */
+  set filterPadding(v: number) {
+    this.resources.perspectiveUniforms.uniforms.uFilterPadding = v;
+  }
+  get filterPadding(): number {
+    return this.resources.perspectiveUniforms.uniforms.uFilterPadding as number;
   }
 
   /** Debug mode: 0=normal rendering, 1=passthrough (shows raw filter texture). */
