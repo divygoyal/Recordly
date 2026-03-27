@@ -318,7 +318,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
     const perspSpringXRef = useRef(createSpringState(0));
     const perspSpringYRef = useRef(createSpringState(0));
     const perspSpringZRef = useRef(createSpringState(0));
-    const perspFilterActiveRef = useRef(false);
+    // (perspFilterActiveRef removed — filter is now always-on)
     const spotlightRef = useRef<HTMLDivElement | null>(null);
     const showShadowRef = useRef(showShadow);
     const shadowIntensityRef = useRef(shadowIntensity);
@@ -1444,8 +1444,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
           }
 
           // 3D perspective with spring animation (FocuSee-style camera swing).
-          // Only active during zoom — the 2D squircle mask handles corners
-          // when not zoomed; the shader SDF handles them during 3D rotation.
+          // ALWAYS active — the shader provides rounded corners via SDF at all
+          // times (matching FocuSee's always-present Trans3DCommand/D2D clip).
+          // When not zooming: identity transform + rounded corners.
+          // When zooming: animated 3D rotation + same rounded corners.
           const perspFilter = perspectiveFilterRef.current;
           if (perspFilter) {
             const zoom3d = activeRegion?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
@@ -1492,10 +1494,12 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
               PERSP_SPRING_CONFIG,
             );
 
-            // Gate rotation by zoomProgress (matches FocuSee's Animation.Info.Alpha gating)
-            perspFilter.rotateX = springRotX * zoomProgress;
-            perspFilter.rotateY = springRotY * zoomProgress;
-            perspFilter.rotateZ = springRotZ * zoomProgress;
+            // Spring output IS the rotation — no zoomProgress gating.
+            // FocuSee's SpringTransform targets go 0→desired (zoom in) or
+            // desired→0 (zoom out); the spring handles the full transition.
+            perspFilter.rotateX = springRotX;
+            perspFilter.rotateY = springRotY;
+            perspFilter.rotateZ = springRotZ;
             perspFilter.fov = fov;
             perspFilter.cornerRadius = 0.04;
             // FocuSee's card always shows full content — no inset cropping.
@@ -1509,48 +1513,8 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
             perspFilter.debugMode = 0;
 
-            // Activate filter when zooming — the content-aware SDF correctly
-            // handles FILTER_PADDING so corners align with video edges at
-            // any zoom level.  When not zooming the 2D squircle mask is
-            // cheaper (no padding allocation / extra GPU texture).
-            if (zoomProgress > 0) {
-              spriteFilters.push(perspFilter);
-
-              // Diagnostic: log filter state once per activation
-              if (!perspFilterActiveRef.current) {
-                const cam = cameraContainerRef.current;
-                // Compute videoSprite's bounds directly for diagnostic
-                let spriteBoundsStr = 'N/A';
-                try {
-                  const sb = vs.getFastGlobalBounds(true);
-                  spriteBoundsStr = `x=${sb.minX?.toFixed(1)},y=${sb.minY?.toFixed(1)},w=${sb.width?.toFixed(1)},h=${sb.height?.toFixed(1)}`;
-                } catch (_e) { /* ignore */ }
-                console.log('[PERSP_FILTER_DIAG]', {
-                  zoomProgress,
-                  spriteExists: !!vs,
-                  spriteVisible: vs?.visible,
-                  spriteRenderable: (vs as any)?.renderable,
-                  spriteAlpha: vs?.alpha,
-                  spriteDisplayStatus: (vs as any)?.globalDisplayStatus,
-                  spriteGlobalBounds: spriteBoundsStr,
-                  spriteGroupTransform: vs?.groupTransform
-                    ? { a: vs.groupTransform.a, d: vs.groupTransform.d, tx: vs.groupTransform.tx, ty: vs.groupTransform.ty }
-                    : null,
-                  containerVisible: vc.visible,
-                  containerAlpha: vc.alpha,
-                  containerDisplayStatus: (vc as any)?.globalDisplayStatus,
-                  filterPadding: perspFilter.padding,
-                  filterResolution: perspFilter.resolution,
-                  clipToViewport: perspFilter.clipToViewport,
-                  cameraScale: cam?.scale?.x,
-                  cameraPosX: cam?.position?.x,
-                  cameraPosY: cam?.position?.y,
-                });
-              }
-              perspFilterActiveRef.current = true;
-            } else {
-              perspFilterActiveRef.current = false;
-            }
+            // Always active — provides consistent rounded corners at all times.
+            spriteFilters.push(perspFilter);
 
             // Spotlight background dimming
             const spotlightEl = spotlightRef.current;
@@ -1603,20 +1567,13 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             vc.filters = newContainerCount > 0 ? containerFilters : null;
           }
 
-          // Mask toggle: DISABLE during zoom (PixiJS v8 applies mask BEFORE
-          // filter → clips 2D content before 3D projection). RE-ENABLE when
-          // not zoomed so the video renders within proper bounds.
-          // During zoom, the shader SDF provides rounded corners + inset.
+          // Mask: always disabled — the always-on perspective filter provides
+          // rounded corners via SDF. PixiJS v8 applies mask BEFORE filter,
+          // which would clip content before 3D projection.
           const mg = maskGraphicsRef.current;
-          const filtersActive = spriteFilters.length > 0;
-          if (mg) {
-            if (filtersActive && vc.mask === mg) {
-              vc.mask = null;
-              mg.visible = false;
-            } else if (!filtersActive && vc.mask !== mg) {
-              mg.visible = true;
-              vc.mask = mg;
-            }
+          if (mg && vc.mask === mg) {
+            vc.mask = null;
+            mg.visible = false;
           }
         }
       };

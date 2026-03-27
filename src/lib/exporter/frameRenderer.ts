@@ -839,8 +839,9 @@ export class FrameRenderer {
         }
       }
 
-      // 3D perspective with spring animation — only active during zoom.
-      // Applied to videoSprite (not videoContainer) to get correct filter bounds.
+      // 3D perspective with spring animation — ALWAYS active.
+      // Provides consistent rounded corners via SDF at all times,
+      // identity transform when not zooming.
       if (this.perspectiveFilter) {
         const zoom3d = activeRegion?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
         const deltaMs = Math.max(1, timeMs - this.lastFrameTimeMs);
@@ -864,9 +865,10 @@ export class FrameRenderer {
         this.lastSpringRotX = springRotX;
         this.lastSpringRotY = springRotY;
 
-        this.perspectiveFilter.rotateX = springRotX * activeProgress;
-        this.perspectiveFilter.rotateY = springRotY * activeProgress;
-        this.perspectiveFilter.rotateZ = springRotZ * activeProgress;
+        // Spring output IS the rotation — no progress gating.
+        this.perspectiveFilter.rotateX = springRotX;
+        this.perspectiveFilter.rotateY = springRotY;
+        this.perspectiveFilter.rotateZ = springRotZ;
         this.perspectiveFilter.fov = fov;
         this.perspectiveFilter.cornerRadius = 0.04;
         // FocuSee's card always shows full content — no inset cropping.
@@ -876,9 +878,8 @@ export class FrameRenderer {
         this.perspectiveFilter.focusBrightness = 0.12 * activeProgress;
         this.perspectiveFilter.focusCenter = [activeFocus.cx, activeFocus.cy];
 
-        if (activeProgress > 0) {
-          spriteFilters.push(this.perspectiveFilter);
-        }
+        // Always active — consistent rounded corners at all times.
+        spriteFilters.push(this.perspectiveFilter);
       }
       this.lastFrameTimeMs = timeMs;
 
@@ -888,18 +889,11 @@ export class FrameRenderer {
         this.videoSprite.filters = spriteFilters.length > 0 ? spriteFilters : null;
       }
 
-      // Mask must be DISABLED during zoom: PixiJS v8 applies mask BEFORE
-      // filter, so the squircle clips content before 3D projection.
-      // Re-enable mask when not zoomed for 2D rounded corners.
-      const filtersActive = spriteFilters.length > 0;
-      if (this.maskGraphics) {
-        if (filtersActive && this.videoContainer.mask === this.maskGraphics) {
-          this.videoContainer.mask = null;
-          this.maskGraphics.visible = false;
-        } else if (!filtersActive && this.videoContainer.mask !== this.maskGraphics) {
-          this.maskGraphics.visible = true;
-          this.videoContainer.mask = this.maskGraphics;
-        }
+      // Mask: always disabled — the always-on perspective filter provides
+      // rounded corners via SDF. PixiJS v8 applies mask BEFORE filter.
+      if (this.maskGraphics && this.videoContainer.mask === this.maskGraphics) {
+        this.videoContainer.mask = null;
+        this.maskGraphics.visible = false;
       }
     }
 
