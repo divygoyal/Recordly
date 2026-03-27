@@ -176,6 +176,7 @@ async function resolveReadyVideoSourcePath(
 	for (let attempt = 0; attempt <= retries; attempt += 1) {
 		const result = await checkFileExists(sourcePath);
 		if (result.exists && result.size >= MIN_VALID_VIDEO_FILE_SIZE) {
+			console.log(`[resolveReady] File ready on attempt ${attempt}: "${sourcePath}" (${result.size} bytes)`);
 			return sourcePath;
 		}
 
@@ -184,6 +185,7 @@ async function resolveReadyVideoSourcePath(
 		}
 	}
 
+	console.error(`[resolveReady] File NOT ready after ${retries} retries: "${sourcePath}"`);
 	return null;
 }
 
@@ -1406,15 +1408,20 @@ export default function VideoEditor() {
 				}
 
 				const sessionResult = await window.electronAPI.getCurrentRecordingSession?.();
+				console.log("[loadInitialData] session:", JSON.stringify(sessionResult));
 				if (sessionResult?.success && sessionResult.session?.videoPath) {
 					const rawPath = fromFileUrl(sessionResult.session.videoPath);
+					console.log("[loadInitialData] rawPath:", rawPath);
 					// Wait for the file to be fully written (FFmpeg may still be finalizing)
 					const sourcePath = await resolveReadyVideoSourcePath(rawPath, {
 						retries: INITIAL_VIDEO_SOURCE_RETRY_COUNT,
 						delayMs: INITIAL_VIDEO_SOURCE_RETRY_DELAY_MS,
 					}) ?? rawPath;
+					console.log("[loadInitialData] resolved sourcePath:", sourcePath);
+					const videoUrl = toFileUrl(sourcePath);
+					console.log("[loadInitialData] videoUrl:", videoUrl);
 					setVideoSourcePath(sourcePath);
-					setVideoPath(toFileUrl(sourcePath));
+					setVideoPath(videoUrl);
 					setCurrentProjectPath(null);
 					setLastSavedSnapshot(null);
 					setWebcam((prev) => ({

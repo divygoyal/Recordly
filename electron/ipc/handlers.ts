@@ -4356,7 +4356,8 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
     try {
       const stat = await fs.stat(filePath)
       return { exists: true, size: stat.size }
-    } catch {
+    } catch (err) {
+      console.log(`[check-file-exists] NOT FOUND: "${filePath}" error: ${String(err)}`)
       return { exists: false, size: 0 }
     }
   });

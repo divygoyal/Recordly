@@ -2152,7 +2152,14 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
           onDurationChange={(e) => {
             onDurationChange(e.currentTarget.duration);
           }}
-          onError={() => onError("Failed to load video")}
+          onError={(e) => {
+            const mediaErr = e.currentTarget.error;
+            const code = mediaErr?.code ?? 0;
+            const msg = mediaErr?.message ?? "unknown";
+            // MediaError codes: 1=ABORTED, 2=NETWORK, 3=DECODE, 4=SRC_NOT_SUPPORTED
+            console.error(`[VideoPlayback] <video> error: code=${code} message="${msg}" src="${e.currentTarget.src}"`);
+            onError(`Failed to load video (code ${code}: ${msg})`);
+          }}
         />
       </div>
     );
