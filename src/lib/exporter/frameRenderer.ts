@@ -263,7 +263,7 @@ export class FrameRenderer {
     // Don't attach filters here — unified filter management in renderFrame handles it
     this.videoContainer.filters = null;
 
-    this.perspectiveFilter = new PerspectiveWarpFilter(this.app.renderer.resolution);
+    this.perspectiveFilter = new PerspectiveWarpFilter();
 
     // Setup composite canvas for final output with shadows
     this.compositeCanvas = document.createElement("canvas");
@@ -873,8 +873,8 @@ export class FrameRenderer {
         this.perspectiveFilter.cornerRadius = 0.04;
         this.perspectiveFilter.contentInset = 0.05 * activeProgress;
 
-        // Content bounds are computed inside the GLSL vertex shader using
-        // uOutputFrame + uInputSize built-ins, passed as varyings.
+        // SDF operates directly on frame-space texUV — no content bounds
+        // remapping. clipToViewport=false ensures full container bounds.
 
         // Only activate filter during actual zoom — when not zooming, the
         // 2D squircle mask provides corners and the filter's FILTER_PADDING

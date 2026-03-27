@@ -20,7 +20,6 @@ const VERTEX = /* glsl */ `
   in vec2 aPosition;
   out vec2 vTextureCoord;
   out vec2 vMaxUV;
-  out vec2 vPadFrac;
 
   uniform vec4 uInputSize;
   uniform vec4 uOutputFrame;
@@ -43,13 +42,7 @@ const VERTEX = /* glsl */ `
 
     // PixiJS allocates power-of-2 textures (source.width >= frame.width).
     // vTextureCoord ranges from 0 to maxUV, NOT 0 to 1.
-    // Pass frame-relative values so the fragment shader can work in
-    // normalized "frame space" (0-1 within the actual content frame).
     vMaxUV = uOutputFrame.zw * uInputSize.zw;
-
-    // Padding fraction within the frame (FILTER_PADDING / frame dimensions).
-    // 300.0 must match the TypeScript FILTER_PADDING constant.
-    vPadFrac = vec2(300.0) / uOutputFrame.zw;
   }
 `;
 
@@ -57,7 +50,6 @@ const FRAGMENT = /* glsl */ `
   precision highp float;
   in vec2 vTextureCoord;
   in vec2 vMaxUV;
-  in vec2 vPadFrac;
   out vec4 finalColor;
 
   uniform sampler2D uTexture;
@@ -67,6 +59,7 @@ const FRAGMENT = /* glsl */ `
   uniform float uFov;           // field of view (radians)
   uniform float uCornerRadius;  // corner rounding in UV space (FocuSee: 0.04)
   uniform float uContentInset;  // inset for floating card padding (FocuSee: 0.05)
+  uniform float uDebugMode;     // 0=normal, 1=passthrough (diagnostic)
 
   // Signed distance to a rounded rectangle centered at origin.
   // b = half-size, r = corner radius. Returns negative inside, positive outside.
@@ -76,11 +69,30 @@ const FRAGMENT = /* glsl */ `
   }
 
   void main(void) {
+    // ── Diagnostic passthrough ────────────────────────────────
+    // When uDebugMode > 0.5, output the raw filter texture with
+    // a red border and magenta for empty (transparent) regions.
+    // This helps determine if the filter texture has video content.
+    if (uDebugMode > 0.5) {
+      vec2 fc = vTextureCoord / vMaxUV;
+      // Red border at frame edges
+      if (fc.x < 0.004 || fc.x > 0.996 || fc.y < 0.004 || fc.y > 0.996) {
+        finalColor = vec4(1.0, 0.0, 0.0, 1.0);
+        return;
+      }
+      vec4 raw = texture(uTexture, vTextureCoord);
+      if (raw.a > 0.01) {
+        finalColor = raw;
+      } else {
+        // Semi-transparent magenta where filter texture is empty
+        finalColor = vec4(1.0, 0.0, 1.0, 0.3);
+      }
+      return;
+    }
+
+    // ── Normal 3D perspective projection ──────────────────────
     // Normalize to "frame space" (0-1 within the actual content frame).
-    // PixiJS allocates power-of-2 textures, so vTextureCoord maxes at
-    // vMaxUV (e.g., 0.88), NOT 1.0. Without this normalization the 3D
-    // projection would be off-center and the SDF bounds would overshoot
-    // the valid texture region.
+    // PixiJS PO2 textures mean vTextureCoord maxes at vMaxUV, not 1.0.
     vec2 frameCoord = vTextureCoord / vMaxUV;
 
     // Screen coordinates: -1 to +1, centered on the frame.
@@ -124,27 +136,15 @@ const FRAGMENT = /* glsl */ `
     // texUV is in "frame space" (0-1 within the frame), matching frameCoord.
     vec2 texUV = vec2(localX, localY) / (2.0 * ps) + 0.5;
 
-    // Content bounds within the frame. FILTER_PADDING adds extra pixels
-    // around the container's visible bounds. Content occupies from
-    // vPadFrac to (1 - vPadFrac) within the frame.
-    vec2 contentMin = vPadFrac;
-    vec2 contentMax = 1.0 - vPadFrac;
-    vec2 contentSize = contentMax - contentMin;
-    vec2 contentUV = (texUV - contentMin) / contentSize;
-
-    // Early-out: discard pixels well outside the video content area
-    if (contentUV.x < -0.1 || contentUV.x > 1.1 || contentUV.y < -0.1 || contentUV.y > 1.1) {
-      finalColor = vec4(0.0);
-      return;
-    }
-
-    // Rounded rect SDF on content-local coordinates.
-    // The card spans from (inset, inset) to (1-inset, 1-inset) in content UV.
+    // SDF operates directly on frame-space texUV. During zoom the camera
+    // scales the video to fill most of the filter texture, so there is no
+    // separate "content area" to remap into — the card shape simply covers
+    // the frame minus the inset margin.
     float inset = uContentInset;
     float halfW = 0.5 - inset;
     float halfH = 0.5 - inset;
     float cr = uCornerRadius;
-    vec2 cardCenter = contentUV - 0.5;
+    vec2 cardCenter = texUV - 0.5;
     float dist = roundedBoxSDF(cardCenter, vec2(halfW, halfH), cr);
 
     // Anti-aliased edge: smooth transition over ~1px in UV space
@@ -169,11 +169,13 @@ const DEFAULT_CORNER_RADIUS = 0.04;
 /** Default FOV in radians (30° — matching FocuSee's CreateAtPoint) */
 const DEFAULT_FOV = 0.5236; // 30° in radians
 
-/** Extra padding so warped pixels aren't clipped at edges */
-export const FILTER_PADDING = 300;
+/** Extra padding so warped pixels aren't clipped at edges.
+ *  Keep low — combined with resolution and clipToViewport settings
+ *  the PO2 filter texture must stay ≤ GPU MAX_TEXTURE_SIZE (4096). */
+export const FILTER_PADDING = 150;
 
 export class PerspectiveWarpFilter extends Filter {
-  constructor(rendererResolution?: number) {
+  constructor() {
     const glProgram = GlProgram.from({
       vertex: VERTEX,
       fragment: FRAGMENT,
@@ -190,12 +192,24 @@ export class PerspectiveWarpFilter extends Filter {
           uFov: { value: DEFAULT_FOV, type: "f32" },
           uCornerRadius: { value: DEFAULT_CORNER_RADIUS, type: "f32" },
           uContentInset: { value: 0, type: "f32" },
+          uDebugMode: { value: 0, type: "f32" },
         },
       },
       padding: FILTER_PADDING,
-      resolution: rendererResolution ?? 1,
+      // Force resolution=1 to keep the PO2 filter texture within GPU limits.
+      // During 1.8× zoom, the container's global bounds ≈ 1728×972.
+      // At resolution 2 + padding 300 the PO2 texture would be 8192×4096,
+      // which exceeds MAX_TEXTURE_SIZE on many GPUs (4096).
+      // At resolution 1 + padding 150 → PO2 ≈ 2048×2048 (always safe).
+      resolution: 1,
       antialias: "inherit",
     });
+
+    // Prevent PixiJS from clipping filter bounds to the viewport.
+    // During zoom the camera scales the container well beyond the
+    // viewport; clipping would misrepresent where the video content
+    // sits inside the filter texture and could cause rendering gaps.
+    this.clipToViewport = false;
   }
 
   /** Pitch rotation in radians: negative = top tilts away (FocuSee convention). */
@@ -244,5 +258,13 @@ export class PerspectiveWarpFilter extends Filter {
   }
   get contentInset(): number {
     return this.resources.perspectiveUniforms.uniforms.uContentInset as number;
+  }
+
+  /** Debug mode: 0=normal rendering, 1=passthrough (shows raw filter texture). */
+  set debugMode(v: number) {
+    this.resources.perspectiveUniforms.uniforms.uDebugMode = v;
+  }
+  get debugMode(): number {
+    return this.resources.perspectiveUniforms.uniforms.uDebugMode as number;
   }
 }

@@ -1092,6 +1092,38 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
         appRef.current = app;
         container.appendChild(app.canvas);
 
+        // ── Monkey-patch FilterSystem.push to log filter texture info ──
+        {
+          const filterSys = (app.renderer as any).filter;
+          if (filterSys && typeof filterSys.push === 'function') {
+            const origPush = filterSys.push.bind(filterSys);
+            let pushLogged = false;
+            filterSys.push = function(instruction: any) {
+              origPush(instruction);
+              if (!pushLogged) {
+                pushLogged = true;
+                // Read filterData from the stack
+                const fd = filterSys._filterStack?.[filterSys._filterStackIndex - 1];
+                if (fd) {
+                  console.log('[FILTER_PUSH_DIAG]', {
+                    skip: fd.skip,
+                    boundsMinX: fd.bounds?.minX,
+                    boundsMinY: fd.bounds?.minY,
+                    boundsW: fd.bounds?.width,
+                    boundsH: fd.bounds?.height,
+                    resolution: fd.resolution,
+                    inputTexPixelW: fd.inputTexture?.source?.pixelWidth,
+                    inputTexPixelH: fd.inputTexture?.source?.pixelHeight,
+                    inputTexSourceW: fd.inputTexture?.source?.width,
+                    inputTexSourceH: fd.inputTexture?.source?.height,
+                  });
+                }
+              }
+            };
+          }
+        }
+        // ── End FilterSystem monkey-patch ──
+
         // Camera container - this will be scaled/positioned for zoom
         const cameraContainer = new Container();
         cameraContainerRef.current = cameraContainer;
@@ -1222,8 +1254,64 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
       const motionBlurFilter = new MotionBlurFilter([0, 0], 5, 0);
       motionBlurFilterRef.current = motionBlurFilter;
-      const perspFilter = new PerspectiveWarpFilter(app.renderer.resolution);
+      const perspFilter = new PerspectiveWarpFilter();
       perspectiveFilterRef.current = perspFilter;
+
+      // ── GPU & FILTER DIAGNOSTICS ──────────────────────────────
+      {
+        const gl = (app.renderer as any).gl as WebGL2RenderingContext | undefined;
+        if (gl) {
+          const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+          const maxRB = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE);
+          console.log('[GPU_DIAG]', {
+            MAX_TEXTURE_SIZE: maxTex,
+            MAX_RENDERBUFFER_SIZE: maxRB,
+            rendererResolution: app.renderer.resolution,
+            filterResolution: perspFilter.resolution,
+            filterPadding: perspFilter.padding,
+            clipToViewport: perspFilter.clipToViewport,
+            viewportW: containerRef.current?.clientWidth,
+            viewportH: containerRef.current?.clientHeight,
+          });
+        } else {
+          console.log('[GPU_DIAG] No WebGL context available');
+        }
+
+        // Monkey-patch filter.apply to log input texture dimensions (once)
+        let applyLogged = false;
+        const origApply = perspFilter.apply.bind(perspFilter);
+        (perspFilter as any).apply = function(
+          filterManager: any,
+          input: any,
+          output: any,
+          clearMode: any,
+        ) {
+          if (!applyLogged) {
+            applyLogged = true;
+            const gl2 = (app.renderer as any).gl as WebGL2RenderingContext | undefined;
+            let fbStatus = 'N/A';
+            if (gl2) {
+              const status = gl2.checkFramebufferStatus(gl2.FRAMEBUFFER);
+              fbStatus = status === gl2.FRAMEBUFFER_COMPLETE
+                ? 'COMPLETE'
+                : `INCOMPLETE(0x${status.toString(16)})`;
+            }
+            console.log('[PERSP_APPLY_DIAG]', {
+              inputFrameW: input.frame?.width,
+              inputFrameH: input.frame?.height,
+              inputSourceW: input.source?.width,
+              inputSourceH: input.source?.height,
+              inputPixelW: input.source?.pixelWidth,
+              inputPixelH: input.source?.pixelHeight,
+              inputResolution: input.source?._resolution,
+              framebufferStatus: fbStatus,
+            });
+          }
+          return origApply(filterManager, input, output, clearMode);
+        };
+      }
+      // ── END GPU DIAGNOSTICS ───────────────────────────────────
+
       syncMotionBlurFilterState();
 
       layoutVideoContent();
@@ -1410,10 +1498,13 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             perspFilter.cornerRadius = 0.04;
             perspFilter.contentInset = 0.05 * zoomProgress;
 
-            // Content bounds are computed inside the GLSL vertex shader using
-            // uOutputFrame + uInputSize built-ins, passed to the fragment shader
-            // as varyings. This auto-adapts to zoom scale, resolution, PO2
-            // texture sizing, and container bounds.
+            // ── DIAGNOSTIC: set debugMode=0 for normal rendering, 1 for passthrough
+            perspFilter.debugMode = 0;
+
+            // SDF now operates directly on frame-space texUV — no content
+            // bounds remapping needed. During zoom the camera scales the
+            // video to fill the filter texture, and clipToViewport=false
+            // ensures the full container bounds are captured.
 
             // Only activate the filter when there's actual zoom — when not
             // zooming the 2D squircle mask provides rounded corners and the
@@ -1421,6 +1512,35 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             // mapping (texUV spans padded texture, not video content).
             if (zoomProgress > 0) {
               videoFilters.push(perspFilter);
+
+              // Diagnostic: log filter state once per activation
+              if (!perspFilterActiveRef.current) {
+                const vs = videoSpriteRef.current;
+                const cam = cameraContainerRef.current;
+                console.log('[PERSP_FILTER_DIAG]', {
+                  zoomProgress,
+                  spriteExists: !!vs,
+                  spriteVisible: vs?.visible,
+                  spriteRenderable: (vs as any)?.renderable,
+                  spriteAlpha: vs?.alpha,
+                  spriteDisplayStatus: (vs as any)?.globalDisplayStatus,
+                  spriteIncludeInBuild: (vs as any)?.includeInBuild,
+                  spriteGroupTransform: vs?.groupTransform
+                    ? { a: vs.groupTransform.a, d: vs.groupTransform.d, tx: vs.groupTransform.tx, ty: vs.groupTransform.ty }
+                    : null,
+                  containerVisible: vc.visible,
+                  containerAlpha: vc.alpha,
+                  containerDisplayStatus: (vc as any)?.globalDisplayStatus,
+                  containerMask: vc.mask,
+                  filterPadding: perspFilter.padding,
+                  filterResolution: perspFilter.resolution,
+                  clipToViewport: perspFilter.clipToViewport,
+                  childCount: vc.children.length,
+                  cameraScale: cam?.scale?.x,
+                  cameraPosX: cam?.position?.x,
+                  cameraPosY: cam?.position?.y,
+                });
+              }
               perspFilterActiveRef.current = true;
             } else {
               perspFilterActiveRef.current = false;
