@@ -1349,6 +1349,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
         }
 
         if (videoSprite) {
+          videoSprite.filters = null;
           videoContainer.removeChild(videoSprite);
           videoSprite.destroy();
         }
@@ -1423,19 +1424,27 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
         state.appliedScale = appliedTransform.scale;
 
         // ── Unified filter management ─────────────────────────
-        // Perspective filter goes on videoContainer.  The cursor overlay
-        // also lives inside videoContainer, so it is warped by the same
-        // perspective transform and stays aligned with the video content.
+        // Apply perspective filter to videoSprite DIRECTLY (not to
+        // videoContainer). PixiJS v8's filter system computes the
+        // filter texture size from the container's getFastGlobalBounds().
+        // When the filter is on a Container with effects (mask+filter),
+        // the bounds computation enters a complex effects-aware path
+        // that can produce incorrect (near-zero) bounds, resulting in
+        // a 2×2 filter texture where the video content is invisible.
+        // Applying the filter to the Sprite bypasses this — the sprite
+        // has simple, predictable bounds from its texture dimensions.
         const vc = videoContainerRef.current;
-        if (vc) {
-          const videoFilters: import("pixi.js").Filter[] = [];
+        const vs = videoSpriteRef.current;
+        if (vc && vs) {
+          const spriteFilters: import("pixi.js").Filter[] = [];
+          const containerFilters: import("pixi.js").Filter[] = [];
 
-          // Motion blur: check if the filter has active velocity
+          // Motion blur: stays on videoContainer (applies to all children)
           const mbf = motionBlurFilterRef.current;
           if (mbf && hasActiveMotionBlur(zoomMotionBlurRef.current)) {
             const vel = mbf.velocity as { x: number; y: number };
             if (vel.x !== 0 || vel.y !== 0) {
-              videoFilters.push(mbf);
+              containerFilters.push(mbf);
             }
           }
 
@@ -1501,22 +1510,22 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             // ── DIAGNOSTIC: set debugMode=0 for normal rendering, 1 for passthrough
             perspFilter.debugMode = 0;
 
-            // SDF now operates directly on frame-space texUV — no content
-            // bounds remapping needed. During zoom the camera scales the
-            // video to fill the filter texture, and clipToViewport=false
-            // ensures the full container bounds are captured.
-
             // Only activate the filter when there's actual zoom — when not
             // zooming the 2D squircle mask provides rounded corners and the
             // filter's FILTER_PADDING would break the identity coordinate
             // mapping (texUV spans padded texture, not video content).
             if (zoomProgress > 0) {
-              videoFilters.push(perspFilter);
+              spriteFilters.push(perspFilter);
 
               // Diagnostic: log filter state once per activation
               if (!perspFilterActiveRef.current) {
-                const vs = videoSpriteRef.current;
                 const cam = cameraContainerRef.current;
+                // Compute videoSprite's bounds directly for diagnostic
+                let spriteBoundsStr = 'N/A';
+                try {
+                  const sb = vs.getFastGlobalBounds(true);
+                  spriteBoundsStr = `x=${sb.minX?.toFixed(1)},y=${sb.minY?.toFixed(1)},w=${sb.width?.toFixed(1)},h=${sb.height?.toFixed(1)}`;
+                } catch (_e) { /* ignore */ }
                 console.log('[PERSP_FILTER_DIAG]', {
                   zoomProgress,
                   spriteExists: !!vs,
@@ -1524,18 +1533,16 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
                   spriteRenderable: (vs as any)?.renderable,
                   spriteAlpha: vs?.alpha,
                   spriteDisplayStatus: (vs as any)?.globalDisplayStatus,
-                  spriteIncludeInBuild: (vs as any)?.includeInBuild,
+                  spriteGlobalBounds: spriteBoundsStr,
                   spriteGroupTransform: vs?.groupTransform
                     ? { a: vs.groupTransform.a, d: vs.groupTransform.d, tx: vs.groupTransform.tx, ty: vs.groupTransform.ty }
                     : null,
                   containerVisible: vc.visible,
                   containerAlpha: vc.alpha,
                   containerDisplayStatus: (vc as any)?.globalDisplayStatus,
-                  containerMask: vc.mask,
                   filterPadding: perspFilter.padding,
                   filterResolution: perspFilter.resolution,
                   clipToViewport: perspFilter.clipToViewport,
-                  childCount: vc.children.length,
                   cameraScale: cam?.scale?.x,
                   cameraPosX: cam?.position?.x,
                   cameraPosY: cam?.position?.y,
@@ -1579,12 +1586,22 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             }
           }
 
-          // Only update .filters when the effective count changes (avoids
-          // redundant PixiJS render-target rebuilds that cause glitches).
-          const newCount = videoFilters.length;
-          const oldCount = (vc.filters as import("pixi.js").Filter[] | null)?.length ?? 0;
-          if (newCount !== oldCount || newCount > 0) {
-            vc.filters = newCount > 0 ? videoFilters : null;
+          // ── Apply filters: perspective on SPRITE, motion blur on CONTAINER ──
+          // Perspective filter goes on videoSprite directly — PixiJS computes
+          // filter texture bounds from the target's getFastGlobalBounds().
+          // A Sprite's bounds are simple (texture dims × groupTransform),
+          // whereas a Container with effects (mask/filter) uses a complex
+          // bounds path that can produce incorrect near-zero values.
+          const newSpriteCount = spriteFilters.length;
+          const oldSpriteCount = (vs.filters as import("pixi.js").Filter[] | null)?.length ?? 0;
+          if (newSpriteCount !== oldSpriteCount || newSpriteCount > 0) {
+            vs.filters = newSpriteCount > 0 ? spriteFilters : null;
+          }
+
+          const newContainerCount = containerFilters.length;
+          const oldContainerCount = (vc.filters as import("pixi.js").Filter[] | null)?.length ?? 0;
+          if (newContainerCount !== oldContainerCount || newContainerCount > 0) {
+            vc.filters = newContainerCount > 0 ? containerFilters : null;
           }
 
           // Mask toggle: DISABLE during zoom (PixiJS v8 applies mask BEFORE
@@ -1592,7 +1609,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
           // not zoomed so the video renders within proper bounds.
           // During zoom, the shader SDF provides rounded corners + inset.
           const mg = maskGraphicsRef.current;
-          const filtersActive = videoFilters.length > 0;
+          const filtersActive = spriteFilters.length > 0;
           if (mg) {
             if (filtersActive && vc.mask === mg) {
               vc.mask = null;
