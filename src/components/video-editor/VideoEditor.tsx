@@ -134,9 +134,10 @@ type PendingExportSave = {
 };
 
 const MP4_EXPORT_FRAME_RATE = 60;
-const INITIAL_VIDEO_SOURCE_RETRY_COUNT = 12;
-const INITIAL_VIDEO_SOURCE_RETRY_DELAY_MS = 250;
-const VIDEO_PLAYBACK_RETRY_LIMIT = 3;
+const INITIAL_VIDEO_SOURCE_RETRY_COUNT = 20;
+const INITIAL_VIDEO_SOURCE_RETRY_DELAY_MS = 500;
+const VIDEO_PLAYBACK_RETRY_LIMIT = 5;
+const MIN_VALID_VIDEO_FILE_SIZE = 4096;
 
 function cloneStructured<T>(value: T): T {
 	return globalThis.structuredClone(value);
@@ -174,7 +175,7 @@ async function resolveReadyVideoSourcePath(
 
 	for (let attempt = 0; attempt <= retries; attempt += 1) {
 		const result = await checkFileExists(sourcePath);
-		if (result.exists && result.size > 0) {
+		if (result.exists && result.size >= MIN_VALID_VIDEO_FILE_SIZE) {
 			return sourcePath;
 		}
 

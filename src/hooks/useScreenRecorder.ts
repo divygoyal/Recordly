@@ -271,6 +271,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
       await window.electronAPI.setCurrentVideoPath(videoPath);
     }
 
+    // Brief delay so OS file-system cache can flush the recording to disk
+    // before the editor window tries to load it.
+    await new Promise<void>((resolve) => setTimeout(resolve, 500));
+
     await window.electronAPI.switchToEditor();
   }, []);
 
