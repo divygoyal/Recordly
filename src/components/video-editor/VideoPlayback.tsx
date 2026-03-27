@@ -1351,10 +1351,9 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             }
           }
 
-          // 3D perspective with spring animation (FocuSee-style camera swing)
-          // Filter is ALWAYS active to provide static background padding +
-          // rounded corners (matching FocuSee's backgroundPadding: 0.05).
-          // During zoom, dynamic inset is added on top.
+          // 3D perspective with spring animation (FocuSee-style camera swing).
+          // Only active during zoom — the 2D squircle mask handles corners
+          // when not zoomed; the shader SDF handles them during 3D rotation.
           const perspFilter = perspectiveFilterRef.current;
           if (perspFilter) {
             const zoom3d = activeRegion?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
@@ -1406,12 +1405,21 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             perspFilter.rotateY = springRotY * zoomProgress;
             perspFilter.rotateZ = springRotZ * zoomProgress;
             perspFilter.fov = fov;
-            // Rounded corners + floating card inset — applied in the shader
-            // via SDF so they follow the 3D perspective naturally.
-            perspFilter.cornerRadius = 0.04 * zoomProgress;
+            // Rounded corners (constant 0.04 = FocuSee's backgroundRound) +
+            // floating card inset (ramps with zoom for the "lifted card" look).
+            perspFilter.cornerRadius = 0.04;
             perspFilter.contentInset = 0.05 * zoomProgress;
-            videoFilters.push(perspFilter);
-            perspFilterActiveRef.current = true;
+
+            // Only activate the filter when there's actual zoom — when not
+            // zooming the 2D squircle mask provides rounded corners and the
+            // filter's FILTER_PADDING would break the identity coordinate
+            // mapping (texUV spans padded texture, not video content).
+            if (zoomProgress > 0) {
+              videoFilters.push(perspFilter);
+              perspFilterActiveRef.current = true;
+            } else {
+              perspFilterActiveRef.current = false;
+            }
 
             // Spotlight background dimming
             const spotlightEl = spotlightRef.current;

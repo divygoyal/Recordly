@@ -836,8 +836,9 @@ export class FrameRenderer {
         }
       }
 
-      // 3D perspective with spring animation — always active for static
-      // background padding + rounded corners (matching FocuSee).
+      // 3D perspective with spring animation — only active during zoom.
+      // The 2D squircle mask handles corners when not zoomed; the shader
+      // SDF handles them during 3D rotation.
       if (this.perspectiveFilter) {
         const zoom3d = activeRegion?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
         const deltaMs = Math.max(1, timeMs - this.lastFrameTimeMs);
@@ -867,10 +868,17 @@ export class FrameRenderer {
         this.perspectiveFilter.rotateY = springRotY * activeProgress;
         this.perspectiveFilter.rotateZ = springRotZ * activeProgress;
         this.perspectiveFilter.fov = fov;
-        // Rounded corners + floating card inset — applied in the shader
-        this.perspectiveFilter.cornerRadius = 0.04 * activeProgress;
+        // Rounded corners (constant 0.04 = FocuSee's backgroundRound) +
+        // floating card inset (ramps with zoom for the "lifted card" look).
+        this.perspectiveFilter.cornerRadius = 0.04;
         this.perspectiveFilter.contentInset = 0.05 * activeProgress;
-        filters.push(this.perspectiveFilter);
+
+        // Only activate filter during actual zoom — when not zooming, the
+        // 2D squircle mask provides corners and the filter's FILTER_PADDING
+        // breaks the identity coordinate mapping.
+        if (activeProgress > 0) {
+          filters.push(this.perspectiveFilter);
+        }
       }
       this.lastFrameTimeMs = timeMs;
 
