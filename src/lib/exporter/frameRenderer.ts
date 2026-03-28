@@ -847,15 +847,17 @@ export class FrameRenderer {
         const deltaMs = Math.max(1, timeMs - this.lastFrameTimeMs);
         const is3D = is3DZoomActive(zoom3d, activeProgress);
 
+        // Scale rotation targets by activeProgress so they decay in
+        // lockstep with the 2D zoom (scale/pan). See VideoPlayback.tsx.
         let targetRotX = 0;
         let targetRotY = 0;
         let targetRotZ = 0;
-        let fov = 0.4363; // 25° — narrower FOV for stronger perspective depth
+        let fov = (30 * Math.PI) / 180;
         if (is3D) {
           const target = compute3DTransform(zoom3d!, activeFocus, 1.0);
-          targetRotX = target.rotateX * target.strength;
-          targetRotY = target.rotateY * target.strength;
-          targetRotZ = target.rotateZ * target.strength;
+          targetRotX = target.rotateX * target.strength * activeProgress;
+          targetRotY = target.rotateY * target.strength * activeProgress;
+          targetRotZ = target.rotateZ * target.strength * activeProgress;
           fov = target.fov;
         }
 
@@ -865,20 +867,37 @@ export class FrameRenderer {
         this.lastSpringRotX = springRotX;
         this.lastSpringRotY = springRotY;
 
-        // Spring output IS the rotation — no progress gating.
-        this.perspectiveFilter.rotateX = springRotX;
-        this.perspectiveFilter.rotateY = springRotY;
-        this.perspectiveFilter.rotateZ = springRotZ;
+        // Snap to exact zero when settling
+        const atRest =
+          targetRotX === 0 && targetRotY === 0 && targetRotZ === 0 &&
+          Math.abs(springRotX) < 0.001 &&
+          Math.abs(springRotY) < 0.001 &&
+          Math.abs(springRotZ) < 0.001;
+
+        if (atRest) {
+          this.perspSpringX.value = 0;
+          this.perspSpringX.velocity = 0;
+          this.perspSpringY.value = 0;
+          this.perspSpringY.velocity = 0;
+          this.perspSpringZ.value = 0;
+          this.perspSpringZ.velocity = 0;
+        }
+
+        const finalRotX = atRest ? 0 : springRotX;
+        const finalRotY = atRest ? 0 : springRotY;
+        const finalRotZ = atRest ? 0 : springRotZ;
+
+        this.perspectiveFilter.rotateX = finalRotX;
+        this.perspectiveFilter.rotateY = finalRotY;
+        this.perspectiveFilter.rotateZ = finalRotZ;
         this.perspectiveFilter.fov = fov;
         this.perspectiveFilter.cornerRadius = 0.04;
-        // FocuSee's card always shows full content — no inset cropping.
         this.perspectiveFilter.contentInset = 0;
-        // Depth layers: vignette darkens edges, spotlight brightens focus
         this.perspectiveFilter.vignetteStrength = 0.3 * activeProgress;
         this.perspectiveFilter.focusBrightness = 0.12 * activeProgress;
         this.perspectiveFilter.focusCenter = [activeFocus.cx, activeFocus.cy];
 
-        // Always active — consistent rounded corners at all times.
+        // Always active — consistent rendering path matching FocuSee.
         spriteFilters.push(this.perspectiveFilter);
       }
       this.lastFrameTimeMs = timeMs;
@@ -889,8 +908,7 @@ export class FrameRenderer {
         this.videoSprite.filters = spriteFilters.length > 0 ? spriteFilters : null;
       }
 
-      // Mask: always disabled — the always-on perspective filter provides
-      // rounded corners via SDF. PixiJS v8 applies mask BEFORE filter.
+      // Mask: always disabled — the perspective filter provides SDF corners.
       if (this.maskGraphics && this.videoContainer.mask === this.maskGraphics) {
         this.videoContainer.mask = null;
         this.maskGraphics.visible = false;

@@ -2025,15 +2025,40 @@ export function SettingsPanel({
 								</div>
 							</div>
 							{selectedZoom3d?.enabled && (
-								<SliderControl
-									label="Intensity"
-									value={Math.round((selectedZoom3d?.intensity ?? 0.5) * 100)}
-									onChange={(v) => onZoom3DChange?.({ ...(selectedZoom3d ?? DEFAULT_ZOOM_3D_CONFIG), intensity: v / 100 })}
-									min={10}
-									max={100}
-									step={5}
-									formatValue={(v) => `${v}%`}
-								/>
+								<>
+									<div className="mb-2">
+										<span className="text-[10px] text-slate-400 mb-1 block">Effect</span>
+										<div className="flex gap-1 rounded-md bg-white/5 p-0.5">
+											{(["weak", "normal", "strong"] as const).map((preset) => (
+												<button
+													key={preset}
+													type="button"
+													onClick={() => onZoom3DChange?.({
+														...(selectedZoom3d ?? DEFAULT_ZOOM_3D_CONFIG),
+														preset,
+													})}
+													className={cn(
+														"flex-1 rounded px-2 py-1 text-[10px] font-semibold transition-all capitalize",
+														(selectedZoom3d?.preset ?? "normal") === preset
+															? "bg-[#2563EB] text-white shadow-sm"
+															: "text-slate-400 hover:text-slate-200",
+													)}
+												>
+													{preset}
+												</button>
+											))}
+										</div>
+									</div>
+									<SliderControl
+										label="Intensity"
+										value={Math.round((selectedZoom3d?.intensity ?? 0.5) * 100)}
+										onChange={(v) => onZoom3DChange?.({ ...(selectedZoom3d ?? DEFAULT_ZOOM_3D_CONFIG), intensity: v / 100 })}
+										min={10}
+										max={100}
+										step={5}
+										formatValue={(v) => `${v}%`}
+									/>
+								</>
 							)}
 						</div>
 					)}

@@ -22,32 +22,48 @@
  * We negate RotateY after computing from FocuSee's formulas to compensate.
  */
 
-import type { Zoom3DConfig, ZoomFocus } from "../types";
+import type { Zoom3DConfig, Zoom3DPreset, ZoomFocus } from "../types";
 import type { PerspectiveWarpFilter } from "./perspectiveWarpFilter";
-
-// ── Constants (from FocuSee "normal" effect, AutoEffectEnum=2) ─────
 
 const DEG2RAD = Math.PI / 180;
 
-/**
- * Pitch interpolation endpoints — minPitch at cy=0, maxPitch at cy=1.
- * FocuSee computes: RotateX = minPitch + cy * (maxPitch - minPitch)
- * Widened from original (-30,-25) for stronger 3D depth feel.
- */
-const MIN_PITCH_DEG = -38; // pitch at cy=0 (top of screen → steeper tilt)
-const MAX_PITCH_DEG = -18; // pitch at cy=1 (bottom of screen → shallower tilt)
+// ── FocuSee preset parameters (decoded from CreateAtPoint IL bytecode) ──
 
-/**
- * Yaw interpolation: RotateY = maxYaw + cx * (minYaw - maxYaw)
- * At cx=0: maxYaw=28°, at cx=1: minYaw=-28°
- * Widened from original (±20) for more dynamic horizontal rotation.
- */
-const MAX_YAW_DEG = 28;
-const MIN_YAW_DEG = -28;
+interface Preset3DParams {
+  /** Pitch at cy=0 (top of screen) */
+  minPitch: number;
+  /** Pitch at cy=1 (bottom of screen) */
+  maxPitch: number;
+  /** Yaw at cx=0 (left edge) */
+  maxYaw: number;
+  /** Yaw at cx=1 (right edge) */
+  minYaw: number;
+  /** Roll modulation factor (0 = no roll) */
+  rollFactor: number;
+  /** Field of view in degrees */
+  fov: number;
+}
 
-/** Roll factor: RotateZ = (cx-0.5)*2 * cy * ROLL_FACTOR
- * Increased from -4 for more visible card tilt. */
-const ROLL_FACTOR_DEG = -6;
+export const PRESET_PARAMS: Record<Zoom3DPreset, Preset3DParams> = {
+  weak: {
+    minPitch: -12, maxPitch: -18,
+    maxYaw: 20, minYaw: -20,
+    rollFactor: 0,
+    fov: 30,
+  },
+  normal: {
+    minPitch: -30, maxPitch: -25,
+    maxYaw: 20, minYaw: -20,
+    rollFactor: -4,
+    fov: 30,
+  },
+  strong: {
+    minPitch: -35, maxPitch: -20,
+    maxYaw: 25, minYaw: -25,
+    rollFactor: -6,
+    fov: 35,
+  },
+};
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -69,10 +85,10 @@ export interface Transform3DResult {
 /**
  * Compute 3D camera rotation from zoom focus position, config, and progress.
  *
- * Uses FocuSee's exact CreateAtPoint IL formulas (normal effect):
- *   RotateX = -30 + cy * 5             (always backward, shallower at bottom)
- *   RotateY = 20 - cx * 40             (yaw from horizontal position)
- *   RotateZ = (cx-0.5)*2 * cy * (-4)   (subtle roll)
+ * Uses FocuSee's exact CreateAtPoint IL formulas with preset support:
+ *   RotateX = minPitch + cy * (maxPitch - minPitch)
+ *   RotateY = maxYaw + cx * (minYaw - maxYaw)  (negated for GLSL convention)
+ *   RotateZ = (cx-0.5)*2 * cy * rollFactor
  *
  * Returns TARGET rotation angles. Spring animation handles smoothing.
  */
@@ -81,7 +97,9 @@ export function compute3DTransform(
   focus: ZoomFocus,
   progress: number,
 ): Transform3DResult {
-  const fov = ((config.fov ?? 25) * Math.PI) / 180;
+  const preset = config.preset ?? "normal";
+  const params = PRESET_PARAMS[preset];
+  const fov = ((config.fov ?? params.fov) * Math.PI) / 180;
 
   if (!config.enabled || progress <= 0 || config.intensity <= 0) {
     return { rotateX: 0, rotateY: 0, rotateZ: 0, fov, strength: 0 };
@@ -89,20 +107,19 @@ export function compute3DTransform(
 
   const strength = progress * config.intensity;
 
-  // FocuSee "normal" effect (reverse-engineered from CreateAtPoint IL bytecode)
   // RotateX = minPitch + cy * (maxPitch - minPitch)
   const rotateXDeg =
-    MIN_PITCH_DEG + focus.cy * (MAX_PITCH_DEG - MIN_PITCH_DEG);
+    params.minPitch + focus.cy * (params.maxPitch - params.minPitch);
 
   // RotateY = maxYaw + cx * (minYaw - maxYaw) — FocuSee formula
   // NEGATED to map from WPF convention (+Y = left toward camera) to our
   // GLSL shader convention (+Y = right toward camera)
   const rotateYDeg =
-    -(MAX_YAW_DEG + focus.cx * (MIN_YAW_DEG - MAX_YAW_DEG));
+    -(params.maxYaw + focus.cx * (params.minYaw - params.maxYaw));
 
   // RotateZ = (cx - 0.5) * 2 * cy * rollFactor
   const rotateZDeg =
-    (focus.cx - 0.5) * 2 * focus.cy * ROLL_FACTOR_DEG;
+    (focus.cx - 0.5) * 2 * focus.cy * params.rollFactor;
 
   return {
     rotateX: rotateXDeg * DEG2RAD,

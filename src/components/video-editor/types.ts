@@ -327,6 +327,9 @@ export const DEFAULT_ZOOM_DEPTH: ZoomDepth = 3;
 
 // ── 3D Zoom ──────────────────────────────────────────────
 
+/** FocuSee 3D zoom effect preset (decoded from CreateAtPoint IL bytecode). */
+export type Zoom3DPreset = "weak" | "normal" | "strong";
+
 /**
  * 3D zoom configuration. When enabled, the recording surface tilts in 3D
  * space during zoom transitions. The tilt direction is **automatically
@@ -335,16 +338,19 @@ export const DEFAULT_ZOOM_DEPTH: ZoomDepth = 3;
  */
 export interface Zoom3DConfig {
   enabled: boolean;
-  /** 0–1 intensity of the perspective tilt (default 0.5). */
+  /** 0–1 intensity of the perspective tilt (default 1.0). */
   intensity: number;
-  /** Field of view in degrees (default 30, matching FocuSee). Lower = stronger perspective. */
+  /** Field of view in degrees (default from preset: 30 for normal/weak, 35 for strong). */
   fov?: number;
+  /** FocuSee effect preset — controls rotation range and FOV. Default "normal". */
+  preset?: Zoom3DPreset;
 }
 
 export const DEFAULT_ZOOM_3D_CONFIG: Zoom3DConfig = {
   enabled: true,
   intensity: 1.0,
   fov: 30,
+  preset: "normal",
 };
 
 export function clampFocusToDepth(

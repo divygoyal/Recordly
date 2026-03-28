@@ -1443,38 +1443,46 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             }
           }
 
-          // 3D perspective with spring animation (FocuSee-style camera swing).
-          // ALWAYS active — the shader provides rounded corners via SDF at all
+          // 3D perspective — FocuSee-style camera swing.
+          // ALWAYS active: the shader provides rounded corners via SDF at all
           // times (matching FocuSee's always-present Trans3DCommand/D2D clip).
-          // When not zooming: identity transform + rounded corners.
-          // When zooming: animated 3D rotation + same rounded corners.
           const perspFilter = perspectiveFilterRef.current;
           if (perspFilter) {
             const zoom3d = activeRegion?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
             const deltaMs = appRef.current?.ticker.deltaMS ?? 16;
             const is3D = is3DZoomActive(zoom3d, zoomProgress);
 
-            // Compute target rotation — FocuSee uses STEP targets: full rotation
-            // immediately when zoom starts, 0 when zoom ends. The overdamped spring
-            // handles all smoothing (reaches ~77% at 400ms, ~96% at 800ms).
+            // ── Synchronized rotation targets ─────────────────────────
+            // FocuSee's SpringTransform animates scale, position, AND
+            // rotation through the same spring system so they settle
+            // together. Recordly's 2D zoom uses easeOutCubic (via
+            // computeRegionStrength) while 3D uses a spring — these have
+            // different settle times. To synchronize them:
+            //
+            // Multiply the rotation targets by zoomProgress so they
+            // decay alongside the 2D zoom. The spring then only smooths
+            // the transitions, not the overall decay envelope.
             let targetRotX = 0;
             let targetRotY = 0;
             let targetRotZ = 0;
-            let fov = 0.4363; // 25° — narrower FOV for stronger perspective depth
+            let fov = (30 * Math.PI) / 180; // 30° — matches FocuSee normal preset
             if (is3D) {
-              // Pass progress=1.0 to get FULL rotation target immediately
               const target = compute3DTransform(
                 zoom3d!,
                 focus,
                 1.0,
               );
-              targetRotX = target.rotateX * target.strength;
-              targetRotY = target.rotateY * target.strength;
-              targetRotZ = target.rotateZ * target.strength;
+              // Scale targets by zoomProgress so rotation decays in
+              // lockstep with the 2D zoom (scale/pan).
+              targetRotX = target.rotateX * target.strength * zoomProgress;
+              targetRotY = target.rotateY * target.strength * zoomProgress;
+              targetRotZ = target.rotateZ * target.strength * zoomProgress;
               fov = target.fov;
             }
 
-            // Spring-animate each rotation axis independently
+            // Spring-animate each rotation axis independently.
+            // The spring smooths the transitions between target values
+            // while zoomProgress controls the overall decay envelope.
             const springRotX = stepSpringValue(
               perspSpringXRef.current,
               targetRotX,
@@ -1494,12 +1502,30 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
               PERSP_SPRING_CONFIG,
             );
 
-            // Spring output IS the rotation — no zoomProgress gating.
-            // FocuSee's SpringTransform targets go 0→desired (zoom in) or
-            // desired→0 (zoom out); the spring handles the full transition.
-            perspFilter.rotateX = springRotX;
-            perspFilter.rotateY = springRotY;
-            perspFilter.rotateZ = springRotZ;
+            // Snap to exact zero when targets are 0 and springs are
+            // near-settled to prevent residual tilt after zoom-out.
+            const atRest =
+              targetRotX === 0 && targetRotY === 0 && targetRotZ === 0 &&
+              Math.abs(springRotX) < 0.001 &&
+              Math.abs(springRotY) < 0.001 &&
+              Math.abs(springRotZ) < 0.001;
+
+            if (atRest) {
+              perspSpringXRef.current.value = 0;
+              perspSpringXRef.current.velocity = 0;
+              perspSpringYRef.current.value = 0;
+              perspSpringYRef.current.velocity = 0;
+              perspSpringZRef.current.value = 0;
+              perspSpringZRef.current.velocity = 0;
+            }
+
+            const finalRotX = atRest ? 0 : springRotX;
+            const finalRotY = atRest ? 0 : springRotY;
+            const finalRotZ = atRest ? 0 : springRotZ;
+
+            perspFilter.rotateX = finalRotX;
+            perspFilter.rotateY = finalRotY;
+            perspFilter.rotateZ = finalRotZ;
             perspFilter.fov = fov;
             perspFilter.cornerRadius = 0.04;
             // FocuSee's card always shows full content — no inset cropping.
@@ -1513,8 +1539,31 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
             perspFilter.debugMode = 0;
 
-            // Always active — provides consistent rounded corners at all times.
+            // ── Adaptive resolution ─────────────────────────────────
+            // FocuSee keeps the 3D pipeline always active — no toggling.
+            // We match that: filter always on, SDF corners always consistent.
+            // To avoid blur at rest, use full renderer DPI when the filter
+            // texture fits in GPU memory (MAX_TEXTURE_SIZE ≈ 4096).
+            // During deep zoom, fall back to resolution=1.
+            const currentScale = cameraContainerRef.current?.scale.x ?? 1;
+            const rendererRes = appRef.current?.renderer.resolution ?? 1;
+            const spriteW = vs.width || 960;
+            const spriteH = vs.height || 540;
+            const maxDim = Math.max(
+              (spriteW * currentScale + 300) * rendererRes,
+              (spriteH * currentScale + 300) * rendererRes,
+            );
+            perspFilter.resolution = maxDim <= 4096 ? rendererRes : 1;
+
+            // ALWAYS active — consistent rendering path at all times,
+            // matching FocuSee's architecture where the 3D pipeline and
+            // D2D clip are never toggled on/off.
             spriteFilters.push(perspFilter);
+
+            const hasActiveRotation =
+              Math.abs(finalRotX) > 0.0005 ||
+              Math.abs(finalRotY) > 0.0005 ||
+              Math.abs(finalRotZ) > 0.0005;
 
             // Spotlight background dimming
             const spotlightEl = spotlightRef.current;
@@ -1522,30 +1571,23 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
               spotlightEl.style.opacity = `${zoomProgress * 0.30}`;
             }
 
-            const hasRotation =
-              Math.abs(springRotX) > 0.001 ||
-              Math.abs(springRotY) > 0.001 ||
-              Math.abs(springRotZ) > 0.001;
-
-            // Tilt-responsive shadow (shifts with rotation, intensifies during zoom)
-            if (hasRotation) {
-              const containerEl = containerRef.current;
-              const si = shadowIntensityRef.current ?? 0;
-              if (containerEl && showShadowRef.current && si > 0) {
-                const shadowX = Math.round(springRotY * 200);
-                const shadowBaseY = si * 12;
-                const shadowY = Math.round(
-                  shadowBaseY - springRotX * 150,
-                );
-                const zoomBoost = 1 + zoomProgress * 0.5;
-                const blur1 = Math.round(si * 60 * zoomBoost);
-                const blur2 = Math.round(si * 24);
-                const blur3 = Math.round(si * 12);
-                containerEl.style.filter =
-                  `drop-shadow(${shadowX}px ${shadowY}px ${blur1}px rgba(0,0,0,${(si * 0.8 * zoomBoost).toFixed(2)})) ` +
-                  `drop-shadow(${Math.round(shadowX * 0.4)}px ${Math.round(si * 4 - springRotX * 50)}px ${blur2}px rgba(0,0,0,${(si * 0.6).toFixed(2)})) ` +
-                  `drop-shadow(0px ${Math.round(si * 2)}px ${blur3}px rgba(0,0,0,${(si * 0.4).toFixed(2)}))`;
-              }
+            // Tilt-responsive shadow
+            const containerEl = containerRef.current;
+            const si = shadowIntensityRef.current ?? 0;
+            if (containerEl && showShadowRef.current && si > 0) {
+              const shadowX = hasActiveRotation ? Math.round(finalRotY * 200) : 0;
+              const shadowBaseY = si * 12;
+              const shadowY = hasActiveRotation
+                ? Math.round(shadowBaseY - finalRotX * 150)
+                : Math.round(shadowBaseY);
+              const zoomBoost = 1 + zoomProgress * 0.5;
+              const blur1 = Math.round(si * 60 * zoomBoost);
+              const blur2 = Math.round(si * 24);
+              const blur3 = Math.round(si * 12);
+              containerEl.style.filter =
+                `drop-shadow(${shadowX}px ${shadowY}px ${blur1}px rgba(0,0,0,${(si * 0.8 * zoomBoost).toFixed(2)})) ` +
+                `drop-shadow(${Math.round(shadowX * 0.4)}px ${Math.round(si * 4 + (hasActiveRotation ? -finalRotX * 50 : 0))}px ${blur2}px rgba(0,0,0,${(si * 0.6).toFixed(2)})) ` +
+                `drop-shadow(0px ${Math.round(si * 2)}px ${blur3}px rgba(0,0,0,${(si * 0.4).toFixed(2)}))`;
             }
           }
 
@@ -1567,9 +1609,12 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             vc.filters = newContainerCount > 0 ? containerFilters : null;
           }
 
-          // Mask: always disabled — the always-on perspective filter provides
-          // rounded corners via SDF. PixiJS v8 applies mask BEFORE filter,
-          // which would clip content before 3D projection.
+          // Mask: always disabled. The always-on perspective filter provides
+          // rounded corners via SDF at all times — matching FocuSee's
+          // architecture where D2D clip + 3D transform are one consistent
+          // pipeline. PixiJS applies mask BEFORE filter, which would clip
+          // content before 3D projection; the SDF avoids this by evaluating
+          // in the projected UV space (equivalent to FocuSee's clip-then-project).
           const mg = maskGraphicsRef.current;
           if (mg && vc.mask === mg) {
             vc.mask = null;

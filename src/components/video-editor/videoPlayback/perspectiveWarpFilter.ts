@@ -141,6 +141,14 @@ const FRAGMENT = /* glsl */ `
     // texUV is in "frame space" (0-1 within the frame), matching frameCoord.
     vec2 texUV = vec2(localX, localY) / (2.0 * ps) + 0.5;
 
+    // ── Discard rays that land outside the frame texture ─────────
+    // At large rotation angles, rays can escape the padded texture
+    // entirely. Discard these early to prevent edge artifacts.
+    if (texUV.x < -0.01 || texUV.x > 1.01 || texUV.y < -0.01 || texUV.y > 1.01) {
+      finalColor = vec4(0.0);
+      return;
+    }
+
     // ── Content-aware SDF ──────────────────────────────────────
     // FILTER_PADDING adds extra pixels around the video content in the
     // filter texture. texUV (= frameCoord at identity) spans the FULL
@@ -171,8 +179,8 @@ const FRAGMENT = /* glsl */ `
       return;
     }
 
-    // Sample the texture. Convert from frame space back to raw texture UV.
-    vec2 sampleUV = clamp(texUV * vMaxUV, vec2(0.0), vMaxUV);
+    // Sample the texture. Clamp to valid range to avoid edge bleeding.
+    vec2 sampleUV = clamp(texUV, vec2(0.0), vec2(1.0)) * vMaxUV;
     vec4 texColor = texture(uTexture, sampleUV);
 
     // Depth layers: vignette darkening + focus brightness (in content UV)
@@ -195,8 +203,8 @@ const FRAGMENT = /* glsl */ `
 /** Corner radius matching FocuSee's backgroundRound (0.04) */
 const DEFAULT_CORNER_RADIUS = 0.04;
 
-/** Default FOV in radians (25° — narrower than 30° for stronger perspective) */
-const DEFAULT_FOV = 0.4363; // 25° in radians
+/** Default FOV in radians — matches FocuSee's normal/weak preset (30°) */
+const DEFAULT_FOV = (30 * Math.PI) / 180; // 30° in radians
 
 /** Extra padding so warped pixels aren't clipped at edges.
  *  Keep low — combined with resolution and clipToViewport settings
@@ -229,11 +237,11 @@ export class PerspectiveWarpFilter extends Filter {
         },
       },
       padding: FILTER_PADDING,
-      // Force resolution=1 to keep the PO2 filter texture within GPU limits.
-      // During 1.8× zoom, the container's global bounds ≈ 1728×972.
-      // At resolution 2 + padding 300 the PO2 texture would be 8192×4096,
-      // which exceeds MAX_TEXTURE_SIZE on many GPUs (4096).
-      // At resolution 1 + padding 150 → PO2 ≈ 2048×2048 (always safe).
+      // Resolution is set adaptively per-frame in VideoPlayback.tsx:
+      // - At rest / shallow zoom: uses full renderer DPI (2-3×) for sharp output
+      // - During deep zoom: falls back to 1 to keep the PO2 filter texture
+      //   within GPU MAX_TEXTURE_SIZE (4096)
+      // Default to 1 here; the ticker updates it each frame.
       resolution: 1,
       antialias: "inherit",
     });
