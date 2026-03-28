@@ -29,11 +29,39 @@ if (process.platform === "darwin") {
 
 export const RECORDINGS_DIR = path.join(app.getPath("userData"), "recordings");
 
+function isCloudSyncPath(dirPath: string): boolean {
+	const normalized = dirPath.replace(/\\/g, '/').toLowerCase();
+	return /onedrive|dropbox|google\s*drive|googledrive|icloud/i.test(normalized);
+}
+
+async function checkDiskSpace(dirPath: string): Promise<{ free: number; warning: boolean }> {
+	try {
+		const { statfs } = await import('node:fs/promises');
+		const stats = await statfs(dirPath);
+		const freeBytes = stats.bavail * stats.bsize;
+		const freeGB = freeBytes / (1024 * 1024 * 1024);
+		return { free: freeGB, warning: freeGB < 2 };
+	} catch {
+		// statfs not available on all platforms, assume OK
+		return { free: Infinity, warning: false };
+	}
+}
+
 async function ensureRecordingsDir() {
 	try {
 		await fs.mkdir(RECORDINGS_DIR, { recursive: true });
 		console.log("RECORDINGS_DIR:", RECORDINGS_DIR);
 		console.log("User Data Path:", app.getPath("userData"));
+
+		if (isCloudSyncPath(RECORDINGS_DIR)) {
+			console.warn('[WARN] Recordings directory is under a cloud-synced folder. This may cause performance issues during recording.');
+			console.warn('[WARN] Consider changing the recordings directory in Settings.');
+		}
+
+		const diskInfo = await checkDiskSpace(RECORDINGS_DIR);
+		if (diskInfo.warning) {
+			console.warn(`[WARN] Low disk space: ${diskInfo.free.toFixed(1)} GB free. Recording may fail.`);
+		}
 	} catch (error) {
 		console.error("Failed to create recordings directory:", error);
 	}

@@ -41,8 +41,6 @@ import {
 } from "./types";
 import {
   DEFAULT_FOCUS,
-  ZOOM_SCALE_DEADZONE,
-  ZOOM_TRANSLATION_DEADZONE_PX,
 } from "./videoPlayback/constants";
 import {
   DEFAULT_CURSOR_CONFIG,
@@ -84,9 +82,12 @@ import {
   is3DZoomActive,
 } from "./videoPlayback/perspectiveTransform";
 import {
-  createSpringState,
-  stepSpringValue,
-  getPerspectiveSpringConfig,
+  createUnifiedZoomState,
+  stepUnifiedZoom,
+  snapUnifiedZoomToRest,
+  getUnifiedZoomSpringConfig,
+  type UnifiedZoomSpringState,
+  type UnifiedZoomTargets,
 } from "./videoPlayback/motionSmoothing";
 import { createVideoEventHandlers } from "./videoPlayback/videoEventHandlers";
 import {
@@ -140,10 +141,10 @@ function createPlaybackAnimationState(): PlaybackAnimationState {
   };
 }
 
-/** Underdamped perspective spring — gives "camera landing" feel with ~5%
- *  overshoot + settle. ζ ≈ 0.686 (underdamped). Much more cinematic than
- *  the previous overdamped config. */
-const PERSP_SPRING_CONFIG = getPerspectiveSpringConfig();
+/** Unified spring config — drives ALL zoom axes (scale, position, rotation)
+ *  through one spring so they arrive and settle together. Matches FocuSee's
+ *  unified SpringTransform architecture. */
+const UNIFIED_ZOOM_CONFIG = getUnifiedZoomSpringConfig();
 
 function getEffectiveNativeAspectRatio(
   dimensions: { width: number; height: number } | null | undefined,
@@ -315,9 +316,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
     );
     const motionBlurFilterRef = useRef<MotionBlurFilter | null>(null);
     const perspectiveFilterRef = useRef<PerspectiveWarpFilter | null>(null);
-    const perspSpringXRef = useRef(createSpringState(0));
-    const perspSpringYRef = useRef(createSpringState(0));
-    const perspSpringZRef = useRef(createSpringState(0));
+    const unifiedZoomRef = useRef<UnifiedZoomSpringState>(createUnifiedZoomState());
     // (perspFilterActiveRef removed — filter is now always-on)
     const spotlightRef = useRef<HTMLDivElement | null>(null);
     const showShadowRef = useRef(showShadow);
@@ -1186,6 +1185,34 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
       };
     }, [onError]);
 
+    // WebGL context loss recovery
+    useEffect(() => {
+      const app = appRef.current;
+      if (!app) return;
+
+      const canvas = app.canvas as HTMLCanvasElement;
+      if (!canvas) return;
+
+      const handleContextLost = (e: Event) => {
+        e.preventDefault();
+        console.error('[GPU] WebGL context lost — pausing playback');
+        onPlayStateChange(false);
+        onError('GPU context lost. Try closing other GPU-intensive apps and reloading.');
+      };
+
+      const handleContextRestored = () => {
+        console.log('[GPU] WebGL context restored');
+      };
+
+      canvas.addEventListener('webglcontextlost', handleContextLost);
+      canvas.addEventListener('webglcontextrestored', handleContextRestored);
+
+      return () => {
+        canvas.removeEventListener('webglcontextlost', handleContextLost);
+        canvas.removeEventListener('webglcontextrestored', handleContextRestored);
+      };
+    }, [pixiReady, onPlayStateChange, onError]);
+
     useEffect(() => {
       const video = videoRef.current;
       if (!video) return;
@@ -1381,8 +1408,12 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
         focus: ZoomFocus,
         motionIntensity: number,
         motionVector: { x: number; y: number },
-        activeRegion: ZoomRegion | null,
+        _activeRegion: ZoomRegion | null,
         zoomProgress: number,
+        springRotX: number,
+        springRotY: number,
+        springRotZ: number,
+        springFov: number,
       ) => {
         const cameraContainer = cameraContainerRef.current;
         if (!cameraContainer) return;
@@ -1419,15 +1450,6 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
         state.appliedScale = appliedTransform.scale;
 
         // ── Unified filter management ─────────────────────────
-        // Apply perspective filter to videoSprite DIRECTLY (not to
-        // videoContainer). PixiJS v8's filter system computes the
-        // filter texture size from the container's getFastGlobalBounds().
-        // When the filter is on a Container with effects (mask+filter),
-        // the bounds computation enters a complex effects-aware path
-        // that can produce incorrect (near-zero) bounds, resulting in
-        // a 2×2 filter texture where the video content is invisible.
-        // Applying the filter to the Sprite bypasses this — the sprite
-        // has simple, predictable bounds from its texture dimensions.
         const vc = videoContainerRef.current;
         const vs = videoSpriteRef.current;
         if (vc && vs) {
@@ -1443,108 +1465,23 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             }
           }
 
-          // 3D perspective — FocuSee-style camera swing.
-          // ALWAYS active: the shader provides rounded corners via SDF at all
-          // times (matching FocuSee's always-present Trans3DCommand/D2D clip).
+          // 3D perspective — rotation values come from the unified spring
+          // (computed in the ticker). No separate spring calls here.
           const perspFilter = perspectiveFilterRef.current;
           if (perspFilter) {
-            const zoom3d = activeRegion?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
-            const deltaMs = appRef.current?.ticker.deltaMS ?? 16;
-            const is3D = is3DZoomActive(zoom3d, zoomProgress);
-
-            // ── Synchronized rotation targets ─────────────────────────
-            // FocuSee's SpringTransform animates scale, position, AND
-            // rotation through the same spring system so they settle
-            // together. Recordly's 2D zoom uses easeOutCubic (via
-            // computeRegionStrength) while 3D uses a spring — these have
-            // different settle times. To synchronize them:
-            //
-            // Multiply the rotation targets by zoomProgress so they
-            // decay alongside the 2D zoom. The spring then only smooths
-            // the transitions, not the overall decay envelope.
-            let targetRotX = 0;
-            let targetRotY = 0;
-            let targetRotZ = 0;
-            let fov = (30 * Math.PI) / 180; // 30° — matches FocuSee normal preset
-            if (is3D) {
-              const target = compute3DTransform(
-                zoom3d!,
-                focus,
-                1.0,
-              );
-              // Scale targets by zoomProgress so rotation decays in
-              // lockstep with the 2D zoom (scale/pan).
-              targetRotX = target.rotateX * target.strength * zoomProgress;
-              targetRotY = target.rotateY * target.strength * zoomProgress;
-              targetRotZ = target.rotateZ * target.strength * zoomProgress;
-              fov = target.fov;
-            }
-
-            // Spring-animate each rotation axis independently.
-            // The spring smooths the transitions between target values
-            // while zoomProgress controls the overall decay envelope.
-            const springRotX = stepSpringValue(
-              perspSpringXRef.current,
-              targetRotX,
-              deltaMs,
-              PERSP_SPRING_CONFIG,
-            );
-            const springRotY = stepSpringValue(
-              perspSpringYRef.current,
-              targetRotY,
-              deltaMs,
-              PERSP_SPRING_CONFIG,
-            );
-            const springRotZ = stepSpringValue(
-              perspSpringZRef.current,
-              targetRotZ,
-              deltaMs,
-              PERSP_SPRING_CONFIG,
-            );
-
-            // Snap to exact zero when targets are 0 and springs are
-            // near-settled to prevent residual tilt after zoom-out.
-            const atRest =
-              targetRotX === 0 && targetRotY === 0 && targetRotZ === 0 &&
-              Math.abs(springRotX) < 0.001 &&
-              Math.abs(springRotY) < 0.001 &&
-              Math.abs(springRotZ) < 0.001;
-
-            if (atRest) {
-              perspSpringXRef.current.value = 0;
-              perspSpringXRef.current.velocity = 0;
-              perspSpringYRef.current.value = 0;
-              perspSpringYRef.current.velocity = 0;
-              perspSpringZRef.current.value = 0;
-              perspSpringZRef.current.velocity = 0;
-            }
-
-            const finalRotX = atRest ? 0 : springRotX;
-            const finalRotY = atRest ? 0 : springRotY;
-            const finalRotZ = atRest ? 0 : springRotZ;
-
-            perspFilter.rotateX = finalRotX;
-            perspFilter.rotateY = finalRotY;
-            perspFilter.rotateZ = finalRotZ;
-            perspFilter.fov = fov;
+            perspFilter.rotateX = springRotX;
+            perspFilter.rotateY = springRotY;
+            perspFilter.rotateZ = springRotZ;
+            perspFilter.fov = springFov;
             perspFilter.cornerRadius = 0.04;
-            // FocuSee's card always shows full content — no inset cropping.
-            // backgroundPadding (0.05) is a LAYOUT gap between card and
-            // background frame, not a content-shrinking parameter.
             perspFilter.contentInset = 0;
             // Depth layers: vignette darkens edges, spotlight brightens focus
             perspFilter.vignetteStrength = 0.3 * zoomProgress;
             perspFilter.focusBrightness = 0.12 * zoomProgress;
             perspFilter.focusCenter = [focus.cx, focus.cy];
-
             perspFilter.debugMode = 0;
 
             // ── Adaptive resolution ─────────────────────────────────
-            // FocuSee keeps the 3D pipeline always active — no toggling.
-            // We match that: filter always on, SDF corners always consistent.
-            // To avoid blur at rest, use full renderer DPI when the filter
-            // texture fits in GPU memory (MAX_TEXTURE_SIZE ≈ 4096).
-            // During deep zoom, fall back to resolution=1.
             const currentScale = cameraContainerRef.current?.scale.x ?? 1;
             const rendererRes = appRef.current?.renderer.resolution ?? 1;
             const spriteW = vs.width || 960;
@@ -1555,15 +1492,13 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             );
             perspFilter.resolution = maxDim <= 4096 ? rendererRes : 1;
 
-            // ALWAYS active — consistent rendering path at all times,
-            // matching FocuSee's architecture where the 3D pipeline and
-            // D2D clip are never toggled on/off.
+            // ALWAYS active — consistent rendering path at all times.
             spriteFilters.push(perspFilter);
 
             const hasActiveRotation =
-              Math.abs(finalRotX) > 0.0005 ||
-              Math.abs(finalRotY) > 0.0005 ||
-              Math.abs(finalRotZ) > 0.0005;
+              Math.abs(springRotX) > 0.0005 ||
+              Math.abs(springRotY) > 0.0005 ||
+              Math.abs(springRotZ) > 0.0005;
 
             // Spotlight background dimming
             const spotlightEl = spotlightRef.current;
@@ -1575,10 +1510,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             const containerEl = containerRef.current;
             const si = shadowIntensityRef.current ?? 0;
             if (containerEl && showShadowRef.current && si > 0) {
-              const shadowX = hasActiveRotation ? Math.round(finalRotY * 200) : 0;
+              const shadowX = hasActiveRotation ? Math.round(springRotY * 200) : 0;
               const shadowBaseY = si * 12;
               const shadowY = hasActiveRotation
-                ? Math.round(shadowBaseY - finalRotX * 150)
+                ? Math.round(shadowBaseY - springRotX * 150)
                 : Math.round(shadowBaseY);
               const zoomBoost = 1 + zoomProgress * 0.5;
               const blur1 = Math.round(si * 60 * zoomBoost);
@@ -1586,7 +1521,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
               const blur3 = Math.round(si * 12);
               containerEl.style.filter =
                 `drop-shadow(${shadowX}px ${shadowY}px ${blur1}px rgba(0,0,0,${(si * 0.8 * zoomBoost).toFixed(2)})) ` +
-                `drop-shadow(${Math.round(shadowX * 0.4)}px ${Math.round(si * 4 + (hasActiveRotation ? -finalRotX * 50 : 0))}px ${blur2}px rgba(0,0,0,${(si * 0.6).toFixed(2)})) ` +
+                `drop-shadow(${Math.round(shadowX * 0.4)}px ${Math.round(si * 4 + (hasActiveRotation ? -springRotX * 50 : 0))}px ${blur2}px rgba(0,0,0,${(si * 0.6).toFixed(2)})) ` +
                 `drop-shadow(0px ${Math.round(si * 2)}px ${blur3}px rgba(0,0,0,${(si * 0.4).toFixed(2)}))`;
             }
           }
@@ -1635,7 +1570,6 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
         let targetProgress = 0;
 
         // If a zoom is selected but video is not playing, show default unzoomed view
-        // (the overlay will show where the zoom will be)
         const selectedId = selectedZoomIdRef.current;
         const hasSelectedZoom = selectedId !== null;
         const shouldShowUnzoomedView = hasSelectedZoom && !isPlayingRef.current;
@@ -1646,7 +1580,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
           targetScaleFactor = zoomScale;
           targetFocus = regionFocus;
-          targetProgress = strength;
+          // Binary target: 1 when inside region, 0 when outside.
+          // The strength from computeRegionStrength is now binary (1 or 0.001).
+          // Map anything > 0.5 to 1, otherwise 0.
+          targetProgress = strength > 0.5 ? 1 : 0;
 
           if (transition) {
             const startTransform = computeZoomTransform({
@@ -1691,37 +1628,78 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
           }
         }
 
+        // ── Compute 3D rotation targets ──────────────────────────
+        const zoom3d = region?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
+        const is3D = is3DZoomActive(zoom3d, targetProgress);
+        let targetRotX = 0;
+        let targetRotY = 0;
+        let targetRotZ = 0;
+        let fov = (30 * Math.PI) / 180;
+        if (is3D) {
+          const target3D = compute3DTransform(zoom3d, targetFocus, 1.0);
+          targetRotX = target3D.rotateX * target3D.strength;
+          targetRotY = target3D.rotateY * target3D.strength;
+          targetRotZ = target3D.rotateZ * target3D.strength;
+          fov = target3D.fov;
+        }
+
+        // ── Unified spring: advance ALL axes with one call ───────
+        // This is the key FocuSee-matching behavior: scale, position,
+        // rotation, and progress all use the SAME spring config and
+        // deltaMs, so they arrive and settle together.
+        const deltaMs = appRef.current?.ticker.deltaMS ?? 16;
+        const springTargets: UnifiedZoomTargets = {
+          progress: targetProgress,
+          scale: targetScaleFactor,
+          focusX: targetFocus.cx,
+          focusY: targetFocus.cy,
+          rotX: targetRotX,
+          rotY: targetRotY,
+          rotZ: targetRotZ,
+        };
+
+        const springOut = stepUnifiedZoom(
+          unifiedZoomRef.current,
+          springTargets,
+          deltaMs,
+          UNIFIED_ZOOM_CONFIG,
+        );
+
+        // Snap to rest when fully disengaged and springs are settled
+        if (springOut.atRest && targetProgress === 0) {
+          snapUnifiedZoomToRest(unifiedZoomRef.current);
+          springOut.progress = 0;
+          springOut.scale = 1;
+          springOut.focusX = 0.5;
+          springOut.focusY = 0.5;
+          springOut.rotX = 0;
+          springOut.rotY = 0;
+          springOut.rotZ = 0;
+        }
+
+        // ── Use spring outputs for everything ────────────────────
         const state = animationStateRef.current;
         const prevScale = state.appliedScale;
         const prevX = state.x;
         const prevY = state.y;
 
-        state.scale = targetScaleFactor;
-        state.focusX = targetFocus.cx;
-        state.focusY = targetFocus.cy;
-        state.progress = targetProgress;
+        state.scale = springOut.scale;
+        state.focusX = springOut.focusX;
+        state.focusY = springOut.focusY;
+        state.progress = springOut.progress;
 
         const projectedTransform = computeZoomTransform({
           stageSize: stageSizeRef.current,
           baseMask: baseMaskRef.current,
-          zoomScale: state.scale,
-          zoomProgress: state.progress,
-          focusX: state.focusX,
-          focusY: state.focusY,
+          zoomScale: springOut.scale,
+          zoomProgress: springOut.progress,
+          focusX: springOut.focusX,
+          focusY: springOut.focusY,
         });
 
-        const appliedScale =
-          Math.abs(projectedTransform.scale - prevScale) < ZOOM_SCALE_DEADZONE
-            ? projectedTransform.scale
-            : projectedTransform.scale;
-        const appliedX =
-          Math.abs(projectedTransform.x - prevX) < ZOOM_TRANSLATION_DEADZONE_PX
-            ? projectedTransform.x
-            : projectedTransform.x;
-        const appliedY =
-          Math.abs(projectedTransform.y - prevY) < ZOOM_TRANSLATION_DEADZONE_PX
-            ? projectedTransform.y
-            : projectedTransform.y;
+        const appliedScale = projectedTransform.scale;
+        const appliedX = projectedTransform.x;
+        const appliedY = projectedTransform.y;
 
         const motionIntensity = Math.max(
           Math.abs(appliedScale - prevScale),
@@ -1736,11 +1714,15 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
         applyTransform(
           { scale: appliedScale, x: appliedX, y: appliedY },
-          targetFocus,
+          { cx: springOut.focusX, cy: springOut.focusY },
           motionIntensity,
           motionVector,
           region ?? null,
-          targetProgress,
+          springOut.progress,
+          springOut.rotX,
+          springOut.rotY,
+          springOut.rotZ,
+          fov,
         );
         applyWebcamBubbleLayout(animationStateRef.current.appliedScale || 1);
 

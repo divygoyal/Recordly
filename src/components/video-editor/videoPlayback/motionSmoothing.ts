@@ -1,5 +1,7 @@
 import { spring } from 'motion';
 
+import type { ZoomTransitionEasing } from '../types';
+
 export interface SpringState {
   value: number;
   velocity: number;
@@ -12,6 +14,167 @@ export interface SpringConfig {
   mass: number;
   restDelta?: number;
   restSpeed?: number;
+}
+
+// ── Unified Zoom Spring ──────────────────────────────────────
+// FocuSee drives ALL zoom axes (scale, position, rotation) through
+// a single spring system so they arrive and settle together. This
+// replaces the old dual system (easeOutCubic for 2D + separate
+// springs for 3D rotation) that caused visible desynchronization.
+
+export interface UnifiedZoomSpringState {
+  progress: SpringState;
+  scale: SpringState;
+  focusX: SpringState;
+  focusY: SpringState;
+  rotX: SpringState;
+  rotY: SpringState;
+  rotZ: SpringState;
+}
+
+export interface UnifiedZoomTargets {
+  progress: number;
+  scale: number;
+  focusX: number;
+  focusY: number;
+  rotX: number;
+  rotY: number;
+  rotZ: number;
+}
+
+export interface UnifiedZoomOutput {
+  progress: number;
+  scale: number;
+  focusX: number;
+  focusY: number;
+  rotX: number;
+  rotY: number;
+  rotZ: number;
+  /** True when all axes are at rest (within rest thresholds). */
+  atRest: boolean;
+}
+
+export function createUnifiedZoomState(): UnifiedZoomSpringState {
+  return {
+    progress: createSpringState(0),
+    scale: createSpringState(1),
+    focusX: createSpringState(0.5),
+    focusY: createSpringState(0.5),
+    rotX: createSpringState(0),
+    rotY: createSpringState(0),
+    rotZ: createSpringState(0),
+  };
+}
+
+export function resetUnifiedZoomState(state: UnifiedZoomSpringState) {
+  resetSpringState(state.progress, 0);
+  resetSpringState(state.scale, 1);
+  resetSpringState(state.focusX, 0.5);
+  resetSpringState(state.focusY, 0.5);
+  resetSpringState(state.rotX, 0);
+  resetSpringState(state.rotY, 0);
+  resetSpringState(state.rotZ, 0);
+}
+
+/**
+ * Advance all 7 spring axes in one call with the SAME deltaMs and config,
+ * ensuring perfectly synchronized settling — matching FocuSee's unified
+ * SpringTransform architecture.
+ */
+export function stepUnifiedZoom(
+  state: UnifiedZoomSpringState,
+  targets: UnifiedZoomTargets,
+  deltaMs: number,
+  config: SpringConfig,
+): UnifiedZoomOutput {
+  const progress = stepSpringValue(state.progress, targets.progress, deltaMs, config);
+  const scale = stepSpringValue(state.scale, targets.scale, deltaMs, config);
+  const focusX = stepSpringValue(state.focusX, targets.focusX, deltaMs, config);
+  const focusY = stepSpringValue(state.focusY, targets.focusY, deltaMs, config);
+  const rotX = stepSpringValue(state.rotX, targets.rotX, deltaMs, config);
+  const rotY = stepSpringValue(state.rotY, targets.rotY, deltaMs, config);
+  const rotZ = stepSpringValue(state.rotZ, targets.rotZ, deltaMs, config);
+
+  const restDelta = config.restDelta ?? 0.0005;
+  const restSpeed = config.restSpeed ?? 0.01;
+
+  const atRest =
+    isAxisAtRest(state.progress, targets.progress, restDelta, restSpeed) &&
+    isAxisAtRest(state.scale, targets.scale, restDelta, restSpeed) &&
+    isAxisAtRest(state.focusX, targets.focusX, restDelta, restSpeed) &&
+    isAxisAtRest(state.focusY, targets.focusY, restDelta, restSpeed) &&
+    isAxisAtRest(state.rotX, targets.rotX, restDelta, restSpeed) &&
+    isAxisAtRest(state.rotY, targets.rotY, restDelta, restSpeed) &&
+    isAxisAtRest(state.rotZ, targets.rotZ, restDelta, restSpeed);
+
+  return { progress, scale, focusX, focusY, rotX, rotY, rotZ, atRest };
+}
+
+function isAxisAtRest(
+  state: SpringState,
+  target: number,
+  restDelta: number,
+  restSpeed: number,
+): boolean {
+  return Math.abs(state.value - target) <= restDelta &&
+         Math.abs(state.velocity) <= restSpeed;
+}
+
+/**
+ * Snap all axes to zero when the zoom has fully disengaged and springs
+ * are near-settled. Prevents residual micro-tilt after zoom-out.
+ */
+export function snapUnifiedZoomToRest(state: UnifiedZoomSpringState) {
+  const axes: (keyof UnifiedZoomSpringState)[] = [
+    'progress', 'rotX', 'rotY', 'rotZ',
+  ];
+  for (const key of axes) {
+    state[key].value = 0;
+    state[key].velocity = 0;
+  }
+  state.scale.value = 1;
+  state.scale.velocity = 0;
+  state.focusX.value = 0.5;
+  state.focusX.velocity = 0;
+  state.focusY.value = 0.5;
+  state.focusY.velocity = 0;
+}
+
+// ── Spring Presets for ZoomTransitionEasing ───────────────────
+// Each easing mode maps to a spring config instead of a bezier curve.
+// This preserves backward compat with project files while giving
+// physically-based motion.
+
+const EASING_SPRING_PRESETS: Record<ZoomTransitionEasing, SpringConfig> = {
+  yourbrand: {
+    stiffness: 240, damping: 30, mass: 1.4,
+    restDelta: 0.0005, restSpeed: 0.01,
+  },
+  glide: {
+    stiffness: 160, damping: 28, mass: 2.0,
+    restDelta: 0.0005, restSpeed: 0.008,
+  },
+  smooth: {
+    stiffness: 300, damping: 35, mass: 1.0,
+    restDelta: 0.0005, restSpeed: 0.01,
+  },
+  snappy: {
+    stiffness: 400, damping: 32, mass: 0.8,
+    restDelta: 0.0005, restSpeed: 0.015,
+  },
+  linear: {
+    stiffness: 800, damping: 80, mass: 0.5,
+    restDelta: 0.0005, restSpeed: 0.02,
+  },
+};
+
+export function getEasingSpringConfig(easing: ZoomTransitionEasing): SpringConfig {
+  return EASING_SPRING_PRESETS[easing] ?? EASING_SPRING_PRESETS.yourbrand;
+}
+
+/** Default unified spring config — matches FocuSee's "normal" feel. */
+export function getUnifiedZoomSpringConfig(): SpringConfig {
+  return EASING_SPRING_PRESETS.yourbrand;
 }
 
 const CURSOR_SMOOTHING_MIN = 0;

@@ -1,4 +1,4 @@
-import type { CursorTelemetryPoint, ZoomFocus } from "../types";
+import type { CursorTelemetryPoint, ZoomDepth, ZoomFocus } from "../types";
 
 export const MIN_DWELL_DURATION_MS = 450;
 export const MAX_DWELL_DURATION_MS = 2600;
@@ -265,5 +265,75 @@ function classifyPostClickBehavior(
   }
 
   return 'click-like';
+}
+
+export function suggestZoomDepth(kind: CursorInteractionCandidate['kind']): ZoomDepth {
+  switch (kind) {
+    case 'text-field-click':
+    case 'double-click-like':
+      return 4; // 3.0x — precision action, need to see detail
+    case 'text-selection':
+    case 'dropdown-open':
+    case 'text-focus-like':
+      return 3; // 2.5x — moderate zoom for context
+    case 'click-like':
+    case 'dwell':
+    default:
+      return 2; // 2.0x — light zoom for general navigation
+  }
+}
+
+export function suggestHoldDuration(kind: CursorInteractionCandidate['kind'], dwellDurationMs?: number): number {
+  switch (kind) {
+    case 'dropdown-open':
+      return 2500;
+    case 'text-field-click':
+      return 2000;
+    case 'text-selection':
+      return 1500;
+    case 'text-focus-like':
+      return 1500;
+    case 'double-click-like':
+      return 800;
+    case 'click-like':
+      return 600;
+    case 'dwell':
+      return dwellDurationMs ?? 1000;
+    default:
+      return 800;
+  }
+}
+
+export function mergeNearbyZoomRegions(
+  candidates: CursorInteractionCandidate[],
+  maxTimeGapMs = 2000,
+  maxSpatialDistance = 0.15,
+): CursorInteractionCandidate[] {
+  if (candidates.length <= 1) return candidates;
+
+  const sorted = [...candidates].sort((a, b) => a.centerTimeMs - b.centerTimeMs);
+  const merged: CursorInteractionCandidate[] = [sorted[0]];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = merged[merged.length - 1];
+    const curr = sorted[i];
+    const timeGap = curr.centerTimeMs - prev.centerTimeMs;
+    const spatialDist = Math.hypot(curr.focus.cx - prev.focus.cx, curr.focus.cy - prev.focus.cy);
+
+    if (timeGap <= maxTimeGapMs && spatialDist <= maxSpatialDistance) {
+      // Merge: extend prev to cover curr, keep the stronger interaction's properties
+      const keepCurr = curr.strength > prev.strength;
+      merged[merged.length - 1] = {
+        centerTimeMs: keepCurr ? curr.centerTimeMs : prev.centerTimeMs,
+        focus: keepCurr ? curr.focus : prev.focus,
+        strength: Math.max(prev.strength, curr.strength),
+        kind: keepCurr ? curr.kind : prev.kind,
+      };
+    } else {
+      merged.push(curr);
+    }
+  }
+
+  return merged;
 }
 

@@ -696,6 +696,38 @@ async function pruneAutoRecordings(exemptPaths: string[] = []) {
       console.warn('Failed to prune old auto recording:', entry.filePath, error)
     }
   }
+
+  // Total disk usage cap: 10GB
+  const MAX_TOTAL_BYTES = 10 * 1024 * 1024 * 1024
+  const remainingEntries = await fs.readdir(recordingsDir, { withFileTypes: true })
+  const remainingStats = await Promise.all(
+    remainingEntries
+      .filter((entry) => entry.isFile() && /^recording-.*\.(mp4|mov|webm)$/i.test(entry.name))
+      .map(async (entry) => {
+        const filePath = path.join(recordingsDir, entry.name)
+        const stats = await fs.stat(filePath)
+        return { filePath, size: stats.size, mtimeMs: stats.mtimeMs }
+      }),
+  )
+
+  let totalBytes = remainingStats.reduce((sum, entry) => sum + entry.size, 0)
+  if (totalBytes > MAX_TOTAL_BYTES) {
+    // Sort oldest first so we delete oldest recordings first
+    const oldestFirst = remainingStats.sort((a, b) => a.mtimeMs - b.mtimeMs)
+    for (const entry of oldestFirst) {
+      if (totalBytes <= MAX_TOTAL_BYTES) break
+      const normalizedFilePath = normalizePath(entry.filePath)
+      if (exempt.has(normalizedFilePath)) continue
+      try {
+        if (await hasSiblingProjectFile(entry.filePath)) continue
+        await fs.rm(entry.filePath, { force: true })
+        await fs.rm(getTelemetryPathForVideo(entry.filePath), { force: true })
+        totalBytes -= entry.size
+      } catch (error) {
+        console.warn('Failed to prune recording for disk cap:', entry.filePath, error)
+      }
+    }
+  }
 }
 
 /**
@@ -3008,6 +3040,13 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
   })
 
   ipcMain.handle('start-native-screen-recording', async (_, source: SelectedSource, options?: NativeMacRecordingOptions) => {
+    // Pre-recording cleanup and disk space check
+    try {
+      await pruneAutoRecordings()
+    } catch (cleanupErr) {
+      console.warn('[cleanup] Pre-recording cleanup failed:', cleanupErr)
+    }
+
     // Windows native capture path
     if (process.platform === 'win32') {
       const windowsCaptureAvailable = await isNativeWindowsCaptureAvailable()
@@ -3504,6 +3543,13 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
   })
 
   ipcMain.handle('start-ffmpeg-recording', async (_, source: SelectedSource) => {
+    // Pre-recording cleanup and disk space check
+    try {
+      await pruneAutoRecordings()
+    } catch (cleanupErr) {
+      console.warn('[cleanup] Pre-recording cleanup failed:', cleanupErr)
+    }
+
     if (ffmpegCaptureProcess) {
       return { success: false, message: 'An FFmpeg recording is already active.' }
     }

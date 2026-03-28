@@ -36,15 +36,15 @@ import {
   is3DZoomActive,
 } from "@/components/video-editor/videoPlayback/perspectiveTransform";
 import {
-  createSpringState,
-  stepSpringValue,
-  getPerspectiveSpringConfig,
-  type SpringState,
+  createUnifiedZoomState,
+  stepUnifiedZoom,
+  snapUnifiedZoomToRest,
+  getUnifiedZoomSpringConfig,
+  type UnifiedZoomSpringState,
+  type UnifiedZoomTargets,
 } from "@/components/video-editor/videoPlayback/motionSmoothing";
 import {
   DEFAULT_FOCUS,
-  ZOOM_SCALE_DEADZONE,
-  ZOOM_TRANSLATION_DEADZONE_PX,
 } from "@/components/video-editor/videoPlayback/constants";
 import { hasActiveMotionBlur } from "@/components/video-editor/videoPlayback/renderQuality";
 import { renderAnnotations } from "./annotationRenderer";
@@ -124,9 +124,8 @@ function createAnimationState(): AnimationState {
   };
 }
 
-/** Underdamped perspective spring — must match VideoPlayback.tsx.
- *  ζ ≈ 0.686 (underdamped) for cinematic overshoot + settle. */
-const PERSP_SPRING_CONFIG = getPerspectiveSpringConfig();
+/** Unified spring config — must match VideoPlayback.tsx exactly. */
+const UNIFIED_ZOOM_CONFIG = getUnifiedZoomSpringConfig();
 
 // Renders video frames with all effects (background, zoom, crop, blur, shadow) to an offscreen canvas for export.
 
@@ -148,9 +147,7 @@ export class FrameRenderer {
   private config: FrameRenderConfig;
   private animationState: AnimationState;
   private motionBlurState: MotionBlurState;
-  private perspSpringX: SpringState;
-  private perspSpringY: SpringState;
-  private perspSpringZ: SpringState;
+  private unifiedZoom: UnifiedZoomSpringState;
   private lastFrameTimeMs = 0;
   private lastSpringRotX = 0;
   private lastSpringRotY = 0;
@@ -173,9 +170,7 @@ export class FrameRenderer {
     this.config = config;
     this.animationState = createAnimationState();
     this.motionBlurState = createMotionBlurState();
-    this.perspSpringX = createSpringState(0);
-    this.perspSpringY = createSpringState(0);
-    this.perspSpringZ = createSpringState(0);
+    this.unifiedZoom = createUnifiedZoomState();
   }
 
   async initialize(): Promise<void> {
@@ -779,13 +774,11 @@ export class FrameRenderer {
 
     let maxMotionIntensity = 0;
     let activeRegion: ZoomRegion | undefined;
-    let activeProgress = 0;
     let activeFocus = { cx: 0.5, cy: 0.5 };
     for (let i = 0; i < TICKS_PER_FRAME; i++) {
       const result = this.updateAnimationState(timeMs);
       maxMotionIntensity = Math.max(maxMotionIntensity, result.motionIntensity);
       activeRegion = result.region;
-      activeProgress = result.progress;
       activeFocus = result.focus;
     }
 
@@ -839,63 +832,23 @@ export class FrameRenderer {
         }
       }
 
-      // 3D perspective with spring animation — ALWAYS active.
-      // Provides consistent rounded corners via SDF at all times,
-      // identity transform when not zooming.
+      // 3D perspective — rotation values come from the unified spring
+      // (computed in updateAnimationState). ALWAYS active for SDF corners.
       if (this.perspectiveFilter) {
+        this.perspectiveFilter.rotateX = this.unifiedZoom.rotX.value;
+        this.perspectiveFilter.rotateY = this.unifiedZoom.rotY.value;
+        this.perspectiveFilter.rotateZ = this.unifiedZoom.rotZ.value;
         const zoom3d = activeRegion?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
-        const deltaMs = Math.max(1, timeMs - this.lastFrameTimeMs);
-        const is3D = is3DZoomActive(zoom3d, activeProgress);
-
-        // Scale rotation targets by activeProgress so they decay in
-        // lockstep with the 2D zoom (scale/pan). See VideoPlayback.tsx.
-        let targetRotX = 0;
-        let targetRotY = 0;
-        let targetRotZ = 0;
-        let fov = (30 * Math.PI) / 180;
-        if (is3D) {
-          const target = compute3DTransform(zoom3d!, activeFocus, 1.0);
-          targetRotX = target.rotateX * target.strength * activeProgress;
-          targetRotY = target.rotateY * target.strength * activeProgress;
-          targetRotZ = target.rotateZ * target.strength * activeProgress;
-          fov = target.fov;
-        }
-
-        const springRotX = stepSpringValue(this.perspSpringX, targetRotX, deltaMs, PERSP_SPRING_CONFIG);
-        const springRotY = stepSpringValue(this.perspSpringY, targetRotY, deltaMs, PERSP_SPRING_CONFIG);
-        const springRotZ = stepSpringValue(this.perspSpringZ, targetRotZ, deltaMs, PERSP_SPRING_CONFIG);
-        this.lastSpringRotX = springRotX;
-        this.lastSpringRotY = springRotY;
-
-        // Snap to exact zero when settling
-        const atRest =
-          targetRotX === 0 && targetRotY === 0 && targetRotZ === 0 &&
-          Math.abs(springRotX) < 0.001 &&
-          Math.abs(springRotY) < 0.001 &&
-          Math.abs(springRotZ) < 0.001;
-
-        if (atRest) {
-          this.perspSpringX.value = 0;
-          this.perspSpringX.velocity = 0;
-          this.perspSpringY.value = 0;
-          this.perspSpringY.velocity = 0;
-          this.perspSpringZ.value = 0;
-          this.perspSpringZ.velocity = 0;
-        }
-
-        const finalRotX = atRest ? 0 : springRotX;
-        const finalRotY = atRest ? 0 : springRotY;
-        const finalRotZ = atRest ? 0 : springRotZ;
-
-        this.perspectiveFilter.rotateX = finalRotX;
-        this.perspectiveFilter.rotateY = finalRotY;
-        this.perspectiveFilter.rotateZ = finalRotZ;
+        const fov = ((zoom3d.fov ?? 30) * Math.PI) / 180;
         this.perspectiveFilter.fov = fov;
         this.perspectiveFilter.cornerRadius = 0.04;
         this.perspectiveFilter.contentInset = 0;
-        this.perspectiveFilter.vignetteStrength = 0.3 * activeProgress;
-        this.perspectiveFilter.focusBrightness = 0.12 * activeProgress;
+        const springProgress = this.unifiedZoom.progress.value;
+        this.perspectiveFilter.vignetteStrength = 0.3 * springProgress;
+        this.perspectiveFilter.focusBrightness = 0.12 * springProgress;
         this.perspectiveFilter.focusCenter = [activeFocus.cx, activeFocus.cy];
+        this.lastSpringRotX = this.unifiedZoom.rotX.value;
+        this.lastSpringRotY = this.unifiedZoom.rotY.value;
 
         // Always active — consistent rendering path matching FocuSee.
         spriteFilters.push(this.perspectiveFilter);
@@ -1066,7 +1019,8 @@ export class FrameRenderer {
 
       targetScaleFactor = zoomScale;
       targetFocus = regionFocus;
-      targetProgress = strength;
+      // Binary target: same logic as VideoPlayback.tsx ticker
+      targetProgress = strength > 0.5 ? 1 : 0;
 
       if (transition) {
         const startTransform = computeZoomTransform({
@@ -1110,38 +1064,73 @@ export class FrameRenderer {
       }
     }
 
-    const state = this.animationState;
+    // ── Compute 3D rotation targets ──────────────────────────
+    const zoom3d = region?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
+    const is3D = is3DZoomActive(zoom3d, targetProgress);
+    let targetRotX = 0;
+    let targetRotY = 0;
+    let targetRotZ = 0;
+    if (is3D) {
+      const target3D = compute3DTransform(zoom3d, targetFocus, 1.0);
+      targetRotX = target3D.rotateX * target3D.strength;
+      targetRotY = target3D.rotateY * target3D.strength;
+      targetRotZ = target3D.rotateZ * target3D.strength;
+    }
 
+    // ── Unified spring: advance ALL axes — matches VideoPlayback.tsx ──
+    const deltaMs = Math.max(1, timeMs - this.lastFrameTimeMs);
+    const springTargets: UnifiedZoomTargets = {
+      progress: targetProgress,
+      scale: targetScaleFactor,
+      focusX: targetFocus.cx,
+      focusY: targetFocus.cy,
+      rotX: targetRotX,
+      rotY: targetRotY,
+      rotZ: targetRotZ,
+    };
+
+    const springOut = stepUnifiedZoom(
+      this.unifiedZoom,
+      springTargets,
+      deltaMs,
+      UNIFIED_ZOOM_CONFIG,
+    );
+
+    // Snap to rest when fully disengaged
+    if (springOut.atRest && targetProgress === 0) {
+      snapUnifiedZoomToRest(this.unifiedZoom);
+      springOut.progress = 0;
+      springOut.scale = 1;
+      springOut.focusX = 0.5;
+      springOut.focusY = 0.5;
+      springOut.rotX = 0;
+      springOut.rotY = 0;
+      springOut.rotZ = 0;
+    }
+
+    // ── Use spring outputs for everything ────────────────────
+    const state = this.animationState;
     const prevScale = state.appliedScale;
     const prevX = state.x;
     const prevY = state.y;
 
-    state.scale = targetScaleFactor;
-    state.focusX = targetFocus.cx;
-    state.focusY = targetFocus.cy;
-    state.progress = targetProgress;
+    state.scale = springOut.scale;
+    state.focusX = springOut.focusX;
+    state.focusY = springOut.focusY;
+    state.progress = springOut.progress;
 
     const projectedTransform = computeZoomTransform({
       stageSize: this.layoutCache.stageSize,
       baseMask: this.layoutCache.maskRect,
-      zoomScale: state.scale,
-      zoomProgress: state.progress,
-      focusX: state.focusX,
-      focusY: state.focusY,
+      zoomScale: springOut.scale,
+      zoomProgress: springOut.progress,
+      focusX: springOut.focusX,
+      focusY: springOut.focusY,
     });
 
-    state.appliedScale =
-      Math.abs(projectedTransform.scale - prevScale) < ZOOM_SCALE_DEADZONE
-        ? projectedTransform.scale
-        : projectedTransform.scale;
-    state.x =
-      Math.abs(projectedTransform.x - prevX) < ZOOM_TRANSLATION_DEADZONE_PX
-        ? projectedTransform.x
-        : projectedTransform.x;
-    state.y =
-      Math.abs(projectedTransform.y - prevY) < ZOOM_TRANSLATION_DEADZONE_PX
-        ? projectedTransform.y
-        : projectedTransform.y;
+    state.appliedScale = projectedTransform.scale;
+    state.x = projectedTransform.x;
+    state.y = projectedTransform.y;
 
     this.lastMotionVector = {
       x: state.x - prevX,
@@ -1155,9 +1144,9 @@ export class FrameRenderer {
         Math.abs(state.y - prevY) /
           Math.max(1, this.layoutCache.stageSize.height),
       ),
-      region,
-      progress: targetProgress,
-      focus: targetFocus,
+      region: region ?? undefined,
+      progress: springOut.progress,
+      focus: { cx: springOut.focusX, cy: springOut.focusY },
     };
   }
 
